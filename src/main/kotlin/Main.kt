@@ -2,8 +2,11 @@ package twizzy.tech
 
 import com.github.shynixn.mccoroutine.minestom.addSuspendingListener
 import com.github.shynixn.mccoroutine.minestom.launch
+import eu.koboo.minestom.stomui.api.ViewRegistry
+import eu.koboo.minestom.stomui.core.MinestomUI
 import io.github._4drian3d.signedvelocity.minestom.SignedVelocity
 import io.github.togar2.pvp.MinestomPvP
+import io.github.togar2.pvp.enchantment.CombatEnchantments
 import io.github.togar2.pvp.feature.CombatFeatures
 import io.github.togar2.pvp.feature.FeatureType
 import io.github.togar2.pvp.feature.provider.DifficultyProvider
@@ -17,11 +20,19 @@ import net.minestom.server.MinecraftServer
 import net.minestom.server.entity.attribute.Attribute
 import net.minestom.server.event.player.AsyncPlayerConfigurationEvent
 import net.minestom.server.event.player.PlayerSpawnEvent
+import net.minestom.server.instance.block.rule.BlockPlacementRule
+import org.everbuild.blocksandstuff.blocks.BlockBehaviorRuleRegistrations
+import org.everbuild.blocksandstuff.blocks.BlockPickup
+import org.everbuild.blocksandstuff.blocks.BlockPlacementRuleRegistrations
+import org.everbuild.blocksandstuff.blocks.PlacedHandlerRegistration
+import org.everbuild.blocksandstuff.blocks.group.VanillaPlacementRules
+import org.everbuild.blocksandstuff.fluids.MinestomFluids
 import revxrsal.commands.minestom.MinestomLamp
 import twizzy.tech.commands.*
 import twizzy.tech.game.Engine
 import twizzy.tech.game.MineManager
 import twizzy.tech.game.RegionManager
+import twizzy.tech.game.items.pickaxe.boosters.Backpack
 import twizzy.tech.listeners.ChatHandler
 import twizzy.tech.listeners.ConnectionHandler
 import twizzy.tech.listeners.ItemInteractions
@@ -36,6 +47,7 @@ var version = "0.21"
 var author = "TwizzyTech"
 lateinit var gameEngine: Engine
 lateinit var serverInstance: MinecraftServer
+lateinit var viewRegistry: ViewRegistry
 
 suspend fun main() {
 
@@ -67,8 +79,16 @@ suspend fun main() {
             val mongoStream = MongoStream.getInstance()
             mongoStream.init()
 
+            val jaSync = JaSync.getInstance()
+            jaSync.init()
+
             val ranks = Ranks.getInstance()
             ranks.init()
+
+            // Initialize the Cell Manager
+            val cellManager = twizzy.tech.game.cells.CellManager.getInstance()
+            cellManager.initialize()
+            println("[PrisonCore/main] Cell system initialized successfully")
 
             // Mark server as loaded after all initialization is complete
             isServerLoaded = true
@@ -95,7 +115,7 @@ suspend fun main() {
                 val onlinePlayers = MinecraftServer.getConnectionManager().onlinePlayers
                 for (player in onlinePlayers) {
                     PlayerData.saveInventory(player.uuid, player.inventory)
-                    PlayerData.saveBackpack(player.uuid)
+                    PlayerData.saveBlockpack(player.uuid)
                 }
 
 
@@ -124,6 +144,8 @@ suspend fun main() {
     val instanceMap = InstanceMap(worldsManager, regionManager, mineManager)
     worldsManager.setInstanceMap(instanceMap)
 
+    // Set the instanceMap in Engine for global access
+    Engine.instanceMap = instanceMap
 
     val instanceContainer = worldsManager.getSpawnWorld()
 
@@ -140,6 +162,7 @@ suspend fun main() {
     globalEventHandler.addChild(
         CombatFeatures.getVanilla(CombatVersion.LEGACY, DifficultyProvider.DEFAULT)
             .remove(FeatureType.FALL)
+            .remove(FeatureType.ENCHANTMENT)
             .remove(FeatureType.EXHAUSTION)
             .add(CombatFeatures.FAIR_RISING_FALLING_KNOCKBACK)
             .build().createNode());
@@ -160,6 +183,11 @@ suspend fun main() {
         .commands(true) // enables registration of Spark commands
         .permissionHandler({ sender, permission -> true }) // allows all command senders to execute all commands
         .enable()
+
+    // Initialize stomui ViewRegistry
+    viewRegistry = MinestomUI.create()
+    viewRegistry.enable()
+    println("[PrisonCore/main] Stomui ViewRegistry initialized and enabled")
 
     val lamp = MinestomLamp.builder()
         .build()
@@ -189,12 +217,25 @@ suspend fun main() {
     lamp.register(Backpack())
     lamp.register(Rankup())
     lamp.register(Leaderboard())
+    lamp.register(Cell())
+    lamp.register(Performance())
+    lamp.register(Blockshop())
 
     MapInteractions(server, regionManager, worldsManager)
     ItemInteractions(server, regionManager, worldsManager)
 
     ConnectionHandler(server, instanceMap)
     ChatHandler(server)
+
+
+    BlockPlacementRuleRegistrations.registerDefault()
+    BlockBehaviorRuleRegistrations.registerDefault()
+    PlacedHandlerRegistration.registerDefault()
+    BlockPickup.enable()
+    MinestomFluids.enableFluids()
+    MinestomFluids.enableVanillaFluids()
+
+
 
     server.start("0.0.0.0", 25567)
 
@@ -205,6 +246,12 @@ suspend fun main() {
     // Register shutdown task to run code when the server stops
     MinecraftServer.getSchedulerManager().buildShutdownTask {
         println("[PrisonCore/main] Server is shutting down, saving data and closing connections...")
+
+        // Save all cell vaults
+        println("[PrisonCore/main] Saving all cell vaults...")
+        runBlocking {
+            instanceMap.saveAllCellVaults()
+        }
 
         println("[PrisonCore/main] Saving all cached player data to MongoDB...")
         val cachedPlayerData = PlayerData.getAllCachedData()
@@ -226,7 +273,7 @@ suspend fun main() {
             val onlinePlayers = MinecraftServer.getConnectionManager().onlinePlayers
             for (player in onlinePlayers) {
                 PlayerData.saveInventory(player.uuid, player.inventory)
-                PlayerData.saveBackpack(player.uuid)
+                PlayerData.saveBlockpack(player.uuid)
             }
 
 
@@ -240,6 +287,10 @@ suspend fun main() {
 
         println("[PrisonCore/main] Closing MongoDB connection...")
         mongoStream.close()
+
+        // Disable stomui ViewRegistry
+        viewRegistry.disable()
+        println("[PrisonCore/main] Stomui ViewRegistry disabled")
 
         println("[PrisonCore/main] Graceful shutdown has completed!")
     }

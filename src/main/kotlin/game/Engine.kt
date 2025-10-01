@@ -1,34 +1,34 @@
 package twizzy.tech.game
 
 import com.github.shynixn.mccoroutine.minestom.addSuspendingListener
+import com.github.shynixn.mccoroutine.minestom.launch
+import com.github.shynixn.mccoroutine.minestom.minecraftDispatcher
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.sound.Sound
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.title.Title
 import net.minestom.server.MinecraftServer
 import net.minestom.server.entity.Player
-import twizzy.tech.game.items.pickaxe.Pickaxe
-import twizzy.tech.util.YamlFactory
-import kotlinx.coroutines.*
-import com.github.shynixn.mccoroutine.minestom.minecraftDispatcher
-import com.github.shynixn.mccoroutine.minestom.launch
 import net.minestom.server.event.player.PlayerBlockBreakEvent
+import twizzy.tech.game.items.pickaxe.Pickaxe
 import twizzy.tech.game.items.pickaxe.boosters.Backpack
 import twizzy.tech.player.PlayerData
+import twizzy.tech.player.PlayerData.Companion.incrementBlocksMined
+import twizzy.tech.util.YamlFactory
+import twizzy.tech.util.PerformanceMonitor
 import java.io.File
 import java.math.BigDecimal
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
-import java.util.UUID
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import twizzy.tech.player.PlayerData.Companion.incrementBlocksMined
 import java.util.concurrent.atomic.AtomicLong
-import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
 
 /**
  * Core game engine optimized for async operations with accurate visual feedback
+ * PERFORMANCE OPTIMIZED VERSION
  */
 class Engine(
     private val server: MinecraftServer,
@@ -40,6 +40,15 @@ class Engine(
         private const val FALLBACK_SELL_VALUE = 1.0
         private const val LEVEL_UP_COOLDOWN_MS = 1000L
         private const val ENCHANT_COOLDOWN_MS = 5000L // 5 second cooldown for enchants
+        private const val MAX_BATCH_CHANNELS = 100 // Limit concurrent batch processors
+        private const val CLEANUP_INTERVAL_MS = 300000L // 5 minutes
+
+        // Packet rate limiting constants
+        private const val MIN_PACKET_INTERVAL_MS = 50L // Minimum 50ms between packets
+        private const val MAX_PACKETS_PER_SECOND = 15 // Maximum 15 packets per second per player
+        private const val PACKET_BURST_LIMIT = 5 // Allow bursts of 5 packets
+        private const val ACTION_BAR_COOLDOWN_MS = 100L // Minimum 100ms between action bar updates
+        private const val SOUND_COOLDOWN_MS = 200L // Minimum 200ms between sounds
 
         // Configuration caches
         private var blocksConfig: Map<String, Any>? = null
@@ -47,11 +56,22 @@ class Engine(
         private var blocksFile: File? = null
         private var gameConfigFile: File? = null
 
-        // Level-up tracking
+        // Static reference to instanceMap for global access
+        var instanceMap: twizzy.tech.util.InstanceMap? = null
+
+        // Level-up tracking with automatic cleanup
         private val playerLastLevelUp = ConcurrentHashMap<UUID, Pair<Int, Long>>()
 
-        // Enchant cooldown tracking: Player UUID -> Enchant Name -> Last Activation Time
+        // Enchant cooldown tracking with size limits
         private val enchantCooldowns = ConcurrentHashMap<UUID, ConcurrentHashMap<String, Long>>()
+
+        // Pre-computed enchant method cache to avoid reflection overhead
+        private val enchantMethodCache = ConcurrentHashMap<String, Boolean>()
+
+        // Packet rate limiting data structures
+        private val playerPacketTimestamps = ConcurrentHashMap<UUID, MutableList<Long>>()
+        private val playerLastActionBar = ConcurrentHashMap<UUID, Long>()
+        private val playerLastSound = ConcurrentHashMap<UUID, Long>()
     }
 
     // Mining summary tracking
@@ -66,33 +86,176 @@ class Engine(
     private val playerMiningSummaries = ConcurrentHashMap<UUID, MiningSummary>()
     private val summaryTimers = ConcurrentHashMap<UUID, Job>()
 
-    // ==================== BATCHING ====================
+    // ==================== OPTIMIZED BATCHING ====================
     private val miningBatchChannels = ConcurrentHashMap<UUID, Channel<Triple<Player, Pickaxe, String>>>()
     private val batchMutex = Mutex()
     private val playerMiningCounts = ConcurrentHashMap<UUID, AtomicLong>()
+
+    // Cleanup job for memory management
+    private var cleanupJob: Job? = null
 
     init {
         setupGameDirectory()
         setupGameConfiguration()
         setupBlockPricing()
         setupEventListeners()
+        startPerformanceMonitoring()
+        startCleanupTask()
+    }
+
+    private fun startPerformanceMonitoring() {
+        PerformanceMonitor.startMonitoring()
     }
 
     /**
-     * Checks if an enchant is on cooldown for a specific player
+     * Periodic cleanup task to prevent memory leaks
      */
-    private fun isEnchantOnCooldown(playerUuid: UUID, enchantName: String): Boolean {
-        val playerCooldowns = enchantCooldowns[playerUuid] ?: return false
-        val lastActivation = playerCooldowns[enchantName] ?: return false
-        return System.currentTimeMillis() - lastActivation < ENCHANT_COOLDOWN_MS
+    private fun startCleanupTask() {
+        cleanupJob = server.launch {
+            while (true) {
+                try {
+                    delay(CLEANUP_INTERVAL_MS)
+                    performCleanup()
+                } catch (e: Exception) {
+                    println("[ENGINE] Cleanup task error: ${e.message}")
+                }
+            }
+        }
     }
 
     /**
-     * Sets an enchant on cooldown for a specific player
+     * Performs periodic cleanup of stale data
      */
-    private fun setEnchantCooldown(playerUuid: UUID, enchantName: String) {
-        val playerCooldowns = enchantCooldowns.computeIfAbsent(playerUuid) { ConcurrentHashMap() }
-        playerCooldowns[enchantName] = System.currentTimeMillis()
+    private suspend fun performCleanup() {
+        val currentTime = System.currentTimeMillis()
+
+        // Clean up old level-up notifications (older than 1 hour)
+        playerLastLevelUp.entries.removeIf { (_, pair) ->
+            currentTime - pair.second > 3600000L
+        }
+
+        // Clean up old enchant cooldowns (older than 1 hour)
+        enchantCooldowns.values.forEach { playerCooldowns ->
+            playerCooldowns.entries.removeIf { (_, time) ->
+                currentTime - time > 3600000L
+            }
+        }
+
+        // Remove empty enchant cooldown maps
+        enchantCooldowns.entries.removeIf { (_, cooldowns) ->
+            cooldowns.isEmpty()
+        }
+
+        // Clean up packet rate limiting data (older than 5 seconds)
+        playerPacketTimestamps.values.forEach { timestamps ->
+            timestamps.removeIf { timestamp ->
+                currentTime - timestamp > 5000L
+            }
+        }
+
+        // Remove empty timestamp lists
+        playerPacketTimestamps.entries.removeIf { (_, timestamps) ->
+            timestamps.isEmpty()
+        }
+
+        // Clean up action bar and sound cooldowns (older than 10 seconds)
+        playerLastActionBar.entries.removeIf { (_, time) ->
+            currentTime - time > 10000L
+        }
+
+        playerLastSound.entries.removeIf { (_, time) ->
+            currentTime - time > 10000L
+        }
+
+        // Log cleanup stats
+        PerformanceMonitor.trackEvent("cleanup_performed")
+        println("[ENGINE] Cleanup completed - Level-ups: ${playerLastLevelUp.size}, Enchant cooldowns: ${enchantCooldowns.size}")
+    }
+
+    // ==================== PACKET RATE LIMITING ====================
+
+    /**
+     * Checks if a player can send a packet without exceeding rate limits
+     */
+    private fun canPlayerSendPacket(playerUUID: UUID): Boolean {
+        val currentTime = System.currentTimeMillis()
+        val timestamps = playerPacketTimestamps.computeIfAbsent(playerUUID) { mutableListOf() }
+
+        // Remove old timestamps (older than 1 second)
+        timestamps.removeIf { timestamp ->
+            currentTime - timestamp > 1000L
+        }
+
+        // Check if we're under the rate limit
+        if (timestamps.size >= MAX_PACKETS_PER_SECOND) {
+            return false
+        }
+
+        // Check minimum interval since last packet
+        if (timestamps.isNotEmpty()) {
+            val lastPacket = timestamps.maxOrNull() ?: 0L
+            if (currentTime - lastPacket < MIN_PACKET_INTERVAL_MS) {
+                return false
+            }
+        }
+
+        // Allow burst but limit it
+        if (timestamps.size >= PACKET_BURST_LIMIT) {
+            val oldestInBurst = timestamps[timestamps.size - PACKET_BURST_LIMIT]
+            if (currentTime - oldestInBurst < 1000L) {
+                return false
+            }
+        }
+
+        // Add timestamp and allow packet
+        timestamps.add(currentTime)
+        return true
+    }
+
+    /**
+     * Checks if a player can send an action bar update
+     */
+    private fun canPlayerSendActionBar(playerUUID: UUID): Boolean {
+        val currentTime = System.currentTimeMillis()
+        val lastActionBar = playerLastActionBar[playerUUID] ?: 0L
+
+        if (currentTime - lastActionBar >= ACTION_BAR_COOLDOWN_MS) {
+            playerLastActionBar[playerUUID] = currentTime
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Checks if a player can play a sound
+     */
+    private fun canPlayerPlaySound(playerUUID: UUID): Boolean {
+        val currentTime = System.currentTimeMillis()
+        val lastSound = playerLastSound[playerUUID] ?: 0L
+
+        if (currentTime - lastSound >= SOUND_COOLDOWN_MS) {
+            playerLastSound[playerUUID] = currentTime
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Safely sends an action bar message with rate limiting
+     */
+    private fun safelySendActionBar(player: Player, message: Component) {
+        if (canPlayerSendActionBar(player.uuid) && canPlayerSendPacket(player.uuid)) {
+            player.sendActionBar(message)
+        }
+    }
+
+    /**
+     * Safely plays a sound with rate limiting
+     */
+    private fun safelyPlaySound(player: Player, sound: Sound) {
+        if (canPlayerPlaySound(player.uuid) && canPlayerSendPacket(player.uuid)) {
+            player.playSound(sound)
+        }
     }
 
     private fun setupEventListeners() {
@@ -129,19 +292,12 @@ class Engine(
                         // Set the enchant on cooldown when it activates
                         setEnchantCooldown(player.uuid, enchant.name)
 
-                        // Debug: Log enchant activation attempt
-                        println("[DEBUG] Trying to activate enchant: ${enchant.name} for player ${player.username}")
 
                         // Check if this enchant has an onActivate method using reflection
                         val removed = tryActivateEnchant(enchant, player, pickaxe, event.blockPosition)
 
-                        // Debug: Log result of enchant activation
-                        println("[DEBUG] Enchant ${enchant.name} removed $removed blocks for player ${player.username}")
-
                         if (removed > 0) {
                             handledByEnchant = true
-                            // Debug: Log mining summary update for enchant blocks
-                            println("[DEBUG] Updating mining summary: enchantBlocks += $removed for player ${player.username}")
                             // Update mining summary for enchant blocks
                             updateMiningSummary(player.uuid, 0L, removed, BigDecimal.ZERO, 0L)
                             // Update pickaxe XP/level and UI after enchant activation
@@ -174,8 +330,6 @@ class Engine(
         blockPosition: net.minestom.server.coordinate.Point
     ): Long {
         return try {
-            println("[DEBUG] Attempting to activate enchant: ${enchant::class.java.simpleName}")
-
             // Try to find the onActivate method - for suspend functions, we need to include the Continuation parameter
             val onActivateMethod = try {
                 val method = enchant::class.java.getDeclaredMethod(
@@ -187,7 +341,6 @@ class Engine(
                     net.minestom.server.coordinate.Point::class.java,
                     kotlin.coroutines.Continuation::class.java // Add continuation for suspend functions
                 )
-                println("[DEBUG] Found suspend onActivate method for ${enchant::class.java.simpleName}")
                 method
             } catch (e: NoSuchMethodException) {
                 // Fallback: try without the continuation parameter (for non-suspend methods)
@@ -199,7 +352,6 @@ class Engine(
                     twizzy.tech.util.Worlds::class.java,
                     net.minestom.server.coordinate.Point::class.java
                 )
-                println("[DEBUG] Found non-suspend onActivate method for ${enchant::class.java.simpleName}")
                 method
             }
 
@@ -208,7 +360,6 @@ class Engine(
 
             // Call the method - for suspend functions, we need to handle them properly
             val result = if (onActivateMethod.parameterCount == 6) {
-                println("[DEBUG] Calling suspend onActivate method for ${enchant::class.java.simpleName}")
                 // This is a suspend function - call it directly as a suspend function
                 // Cast the method to the correct function type and call it
                 val result = withContext(Dispatchers.Default) {
@@ -233,8 +384,6 @@ class Engine(
                 // This is a regular function
                 onActivateMethod.invoke(enchant, player, pickaxe, regionManager, worlds, blockPosition) as? Long ?: 0L
             }
-
-            println("[DEBUG] onActivate method returned: $result for ${enchant::class.java.simpleName}")
             result
 
         } catch (e: NoSuchMethodException) {
@@ -509,39 +658,77 @@ class Engine(
         return@withContext false
     }
 
+    // ==================== BATCHING ====================
+
+    /**
+     * Checks if an enchant is on cooldown for a specific player
+     */
+    private fun isEnchantOnCooldown(playerUuid: UUID, enchantName: String): Boolean {
+        val playerCooldowns = enchantCooldowns[playerUuid] ?: return false
+        val lastActivation = playerCooldowns[enchantName] ?: return false
+        return System.currentTimeMillis() - lastActivation < ENCHANT_COOLDOWN_MS
+    }
+
+    /**
+     * Sets an enchant on cooldown for a specific player
+     */
+    private fun setEnchantCooldown(playerUuid: UUID, enchantName: String) {
+        val playerCooldowns = enchantCooldowns.computeIfAbsent(playerUuid) { ConcurrentHashMap() }
+        playerCooldowns[enchantName] = System.currentTimeMillis()
+    }
+
     // ==================== BATCHING SYSTEM ====================
     /**
-     * Sends a mining event to the batch processor for this player
+     * OPTIMIZED: Sends a mining event to the batch processor with performance tracking
      */
     private fun sendToBatchProcessor(player: Player, pickaxe: Pickaxe, blocks: Long = 1L, blockType: String) {
+        PerformanceMonitor.trackEvent("mining_event")
+
         val playerUUID = player.uuid
+
+        // Prevent creating too many batch channels (memory leak prevention)
+        if (miningBatchChannels.size > MAX_BATCH_CHANNELS) {
+            println("[PERFORMANCE WARNING] Too many active batch channels: ${miningBatchChannels.size}")
+            return
+        }
+
         val channel = miningBatchChannels.computeIfAbsent(playerUUID) {
-            val newChannel = Channel<Triple<Player, Pickaxe, String>>(Channel.UNLIMITED)
+            PerformanceMonitor.trackCoroutine("mining_batch_processor")
+            val newChannel = Channel<Triple<Player, Pickaxe, String>>(capacity = 1000) // Limited capacity instead of unlimited
             server.launch {
-                processMiningBatchOptimized(playerUUID, newChannel)
+                try {
+                    processMiningBatchOptimized(playerUUID, newChannel)
+                } finally {
+                    PerformanceMonitor.untrackCoroutine("mining_batch_processor")
+                }
             }
             newChannel
         }
+
+        // Send blocks in batches to prevent channel overflow
         repeat(blocks.toInt()) {
-            channel.trySend(Triple(player, pickaxe, blockType))
+            if (!channel.trySend(Triple(player, pickaxe, blockType)).isSuccess) {
+                println("[PERFORMANCE WARNING] Mining batch channel full for player ${player.username}")
+                return@repeat
+            }
         }
     }
 
     /**
-     * Chunked batch processor - processes every 100 blocks or when mining stops
+     * OPTIMIZED: Chunked batch processor with better memory management
      */
     private suspend fun processMiningBatchOptimized(playerUUID: UUID, channel: Channel<Triple<Player, Pickaxe, String>>) {
-        val chunkSize = 100L
-        val debounceDelay = 300L
+        val chunkSize = 25L // Further reduced from 50 for better packet management
+        val debounceDelay = 500L // Increased from 200ms to reduce packet frequency
         var lastEventTime = 0L
         var eventCount = 0L
         var latestPlayer: Player? = null
         var latestPickaxe: Pickaxe? = null
         val blockTypeCounts = mutableMapOf<String, Long>()
 
-        while (true) {
-            try {
-                val event = withTimeoutOrNull(debounceDelay + 50L) {
+        try {
+            while (true) {
+                val event = withTimeoutOrNull(debounceDelay + 100L) {
                     channel.receive()
                 }
 
@@ -558,22 +745,31 @@ class Engine(
                         processChunk(playerUUID, latestPlayer!!, latestPickaxe!!, eventCount, blockTypeCounts)
                         eventCount = 0L
                         blockTypeCounts.clear()
+                        PerformanceMonitor.trackEvent("chunk_processed")
                     }
                 } else if (eventCount > 0 && (System.currentTimeMillis() - lastEventTime) >= debounceDelay) {
                     // Process remaining blocks when mining stops
                     processChunk(playerUUID, latestPlayer!!, latestPickaxe!!, eventCount, blockTypeCounts)
                     eventCount = 0L
                     blockTypeCounts.clear()
+                    PerformanceMonitor.trackEvent("final_chunk_processed")
+                } else if (eventCount == 0L) {
+                    // No activity, break the loop to clean up this coroutine
+                    delay(5000) // Wait 5 seconds before cleanup
+                    if (eventCount == 0L) break
                 }
-            } catch (e: Exception) {
-                println("[ERROR] Batch processor error for player $playerUUID: ${e.message}")
-                delay(1000)
             }
+        } catch (e: Exception) {
+            println("[ERROR] Batch processor error for player $playerUUID: ${e.message}")
+        } finally {
+            // Clean up when the processor ends
+            miningBatchChannels.remove(playerUUID)
+            channel.close()
         }
     }
 
     /**
-     * Processes a chunk of mining data
+     * Processes a chunk of mining data with rate-limited UI updates
      */
     private suspend fun processChunk(
         playerUUID: UUID,
@@ -582,6 +778,9 @@ class Engine(
         blockCount: Long,
         blockTypeCounts: Map<String, Long>
     ) {
+        // Track the level before processing to detect actual level changes
+        val levelBefore = currentPickaxe.level
+
         val (updatedPickaxe, leveledUp) = currentPickaxe.mineBatchAsync(blockCount)
         val experienceGained = currentPickaxe.calculateBoostedExp(blockCount)
 
@@ -602,33 +801,28 @@ class Engine(
                 // Apply backpack booster if present
                 val backpackBooster = currentPickaxe.activeBoostersOf<Backpack>().maxByOrNull { it.multiplier }
                 val finalCount = backpackBooster?.applyBooster(count) ?: count
-                PlayerData.addToBackpack(playerUUID, blockType, finalCount.toInt())
+                PlayerData.addToBlockpack(playerUUID, blockType, finalCount.toInt())
             }
         }
 
         // Update mining summary with separate block counts
         updateMiningSummary(playerUUID, regularBlocksCount, enchantBlocksCount, BigDecimal.ZERO, experienceGained)
 
-        // Update UI on main thread
+        // Update UI on main thread with rate-limited packets
         withContext(server.minecraftDispatcher) {
             val pickaxeUpdated = safelyUpdatePickaxe(currentPlayer, updatedPickaxe)
 
             // Only update player level and experience if the pickaxe was successfully updated
-            // AND the player is still holding the SAME pickaxe (same UID) that was being mined with
             val currentHandPickaxe = Pickaxe.fromItemStack(currentPlayer.itemInMainHand)
             if (pickaxeUpdated && currentHandPickaxe != null && currentHandPickaxe.uid == updatedPickaxe.uid) {
                 val actualProgress = updatedPickaxe.expProgress()
                 currentPlayer.level = updatedPickaxe.level
-                val animationSteps = 10
-                val startExp = currentPlayer.exp
-                val targetExp = actualProgress
-                val step = (targetExp - startExp) / animationSteps
-                for (i in 1..animationSteps) {
-                    currentPlayer.exp = (startExp + step * i).coerceIn(0.0f, 1.0f)
-                    delay(30)
-                }
-                currentPlayer.exp = targetExp
-                if (leveledUp) {
+
+                // OPTIMIZED: Non-blocking experience update
+                currentPlayer.exp = actualProgress
+
+                // Only show level up notification if the level actually increased in this chunk
+                if (updatedPickaxe.level > levelBefore) {
                     showLevelUpNotification(currentPlayer, updatedPickaxe.level)
                 }
             }
@@ -639,7 +833,7 @@ class Engine(
 
     // ==================== NOTIFICATION SYSTEM ====================
     private fun showLevelUpNotification(player: Player, level: Int) {
-        // Avoid notification spam
+        // Avoid notification spam with rate limiting
         val lastNotification = playerLastLevelUp[player.uuid]
         if (lastNotification != null && lastNotification.first == level &&
             (System.currentTimeMillis() - lastNotification.second) < LEVEL_UP_COOLDOWN_MS) {
@@ -647,19 +841,22 @@ class Engine(
         }
         playerLastLevelUp[player.uuid] = Pair(level, System.currentTimeMillis())
 
-        // Chat message
-        val chatMessage = YamlFactory.getMessage("commands.pickaxe.levelup.chat", mapOf("level" to level.toString()))
-        player.sendMessage(Component.text(chatMessage))
+        // Use rate-limited packet sending
+        if (canPlayerSendPacket(player.uuid)) {
+            // Chat message
+            val chatMessage = YamlFactory.getMessage("commands.pickaxe.levelup.chat", mapOf("level" to level.toString()))
+            player.sendMessage(Component.text(chatMessage))
 
-        // Title
-        val titleText = YamlFactory.getMessage("commands.pickaxe.levelup.title")
-        val subtitleText = YamlFactory.getMessage("commands.pickaxe.levelup.subtitle", mapOf("level" to level.toString()))
-        val title = Title.title(Component.text(titleText), Component.text(subtitleText))
-        player.showTitle(title)
+            // Title (only if packet rate allows)
+            val titleText = YamlFactory.getMessage("commands.pickaxe.levelup.title")
+            val subtitleText = YamlFactory.getMessage("commands.pickaxe.levelup.subtitle", mapOf("level" to level.toString()))
+            val title = Title.title(Component.text(titleText), Component.text(subtitleText))
+            player.showTitle(title)
 
-        // Sound
-        val soundKey = YamlFactory.getMessage("commands.pickaxe.levelup.sound")
-        player.playSound(Sound.sound(Key.key(soundKey), Sound.Source.PLAYER, 1.0f, 1.0f))
+            // Sound with rate limiting
+            val soundKey = YamlFactory.getMessage("commands.pickaxe.levelup.sound")
+            safelyPlaySound(player, Sound.sound(Key.key(soundKey), Sound.Source.PLAYER, 1.0f, 1.0f))
+        }
     }
 
     // ==================== MINING SUMMARY SYSTEM ====================
@@ -709,7 +906,7 @@ class Engine(
     }
 
     /**
-     * Sends the mining summary to a player and resets the tracking
+     * Sends the mining summary to a player and resets the tracking with rate limiting
      */
     private suspend fun sendMiningSummary(player: Player) {
         val playerUUID = player.uuid
@@ -722,33 +919,36 @@ class Engine(
             val blocksPerSecond = if (duration > 0) summary.blocksMined / duration else 0.0
 
             withContext(server.minecraftDispatcher) {
-                // Create hover text for blocks breakdown
-                val hoverText = Component.text()
-                    .append(Component.text("§7Breakdown:"))
-                    .append(Component.text("\n§e⛏ Raw Blocks: §f${String.format("%,d", summary.blocksMined)}"))
-                    .append(Component.text("\n§d✨ Enchants: §f${String.format("%,d", summary.enchantBlocks)}"))
-                    .build()
+                // Only send if packet rate allows
+                if (canPlayerSendPacket(player.uuid)) {
+                    // Create hover text for blocks breakdown
+                    val hoverText = Component.text()
+                        .append(Component.text("§7Breakdown:"))
+                        .append(Component.text("\n§e⛏ Raw Blocks: §f${String.format("%,d", summary.blocksMined)}"))
+                        .append(Component.text("\n§d✨ Enchants: §f${String.format("%,d", summary.enchantBlocks)}"))
+                        .build()
 
-                // Create the blocks mined component with hover event
-                val blocksMinedComponent = Component.text("§e⛏ Blocks Mined: §f${String.format("%,d", totalBlocks)}")
-                    .hoverEvent(hoverText)
+                    // Create the blocks mined component with hover event
+                    val blocksMinedComponent = Component.text("§e⛏ Blocks Mined: §f${String.format("%,d", totalBlocks)}")
+                        .hoverEvent(hoverText)
 
-                // Create summary message with combined block count
-                val message = Component.text()
-                    .append(Component.text("§6§l▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"))
-                    .append(Component.text("\n§6§lMINING SUMMARY §7(${String.format("%.1f", duration)}s)"))
-                    .append(Component.text("\n§7"))
-                    .append(Component.text("\n").append(blocksMinedComponent))
-                    .append(Component.text("\n§6🪙 Tokens Gained: §f${String.format("%,d", summary.tokensGained.toLong())}"))
-                    .append(Component.text("\n§b⭐ Experience: §f${String.format("%,d", summary.experienceGained)}"))
-                    .append(Component.text("\n§a📊 Rate: §f${String.format("%.1f", blocksPerSecond)} blocks/sec"))
-                    .append(Component.text("\n§6§l▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"))
-                    .build()
+                    // Create summary message with combined block count
+                    val message = Component.text()
+                        .append(Component.text("§6§l▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"))
+                        .append(Component.text("\n§6§lMINING SUMMARY §7(${String.format("%.1f", duration)}s)"))
+                        .append(Component.text("\n§7"))
+                        .append(Component.text("\n").append(blocksMinedComponent))
+                        .append(Component.text("\n§6🪙 Tokens Gained: §f${String.format("%,d", summary.tokensGained.toLong())}"))
+                        .append(Component.text("\n§b⭐ Experience: §f${String.format("%,d", summary.experienceGained)}"))
+                        .append(Component.text("\n§a📊 Rate: §f${String.format("%.1f", blocksPerSecond)} blocks/sec"))
+                        .append(Component.text("\n§6§l▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"))
+                        .build()
 
-                player.sendMessage(message)
+                    player.sendMessage(message)
 
-                // Play sound
-                player.playSound(Sound.sound(Key.key("minecraft:entity.experience_orb.pickup"), Sound.Source.PLAYER, 0.7f, 1.2f))
+                    // Play sound with rate limiting
+                    safelyPlaySound(player, Sound.sound(Key.key("minecraft:entity.experience_orb.pickup"), Sound.Source.PLAYER, 0.7f, 1.2f))
+                }
             }
         }
 
@@ -766,7 +966,7 @@ class Engine(
 
     // ==================== TOKEN REWARD SYSTEM ====================
     /**
-     * Processes token rewards for mining blocks
+     * Processes token rewards for mining blocks with rate-limited notifications
      * Calculates chance based on pickaxe level and awards tokens if successful
      * TokenGreed enchant only affects the amount of tokens, not the chance
      */
@@ -805,9 +1005,9 @@ class Engine(
             // Update mining summary with tokens gained
             updateMiningSummary(player.uuid, 0L, 0L, finalTokens, 0L)
 
-            // Send notification to player
+            // Send notification to player with rate limiting
             val message = Component.text("§6+${finalTokens.toLong()} Tokens! §7(${String.format("%.2f", totalChance * 100)}% chance)")
-            player.sendActionBar(message)
+            safelySendActionBar(player, message)
         }
     }
 

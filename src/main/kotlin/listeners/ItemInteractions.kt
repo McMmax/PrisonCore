@@ -1,13 +1,13 @@
 package twizzy.tech.listeners
 
 import com.github.shynixn.mccoroutine.minestom.addSuspendingListener
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
+import eu.koboo.minestom.stomui.api.item.ModifiableItem
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.sound.Sound
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import net.minestom.server.MinecraftServer
+import net.minestom.server.component.DataComponents
 import net.minestom.server.entity.ItemEntity
 import net.minestom.server.entity.Player
 import net.minestom.server.event.EventFilter
@@ -17,25 +17,34 @@ import net.minestom.server.event.item.ItemDropEvent
 import net.minestom.server.event.item.PickupItemEvent
 import net.minestom.server.event.player.PlayerChangeHeldSlotEvent
 import net.minestom.server.event.player.PlayerHandAnimationEvent
-import net.minestom.server.event.player.PlayerSwapItemEvent
 import net.minestom.server.event.player.PlayerUseItemEvent
-import net.minestom.server.inventory.InventoryType
+import net.minestom.server.inventory.click.Click
 import net.minestom.server.inventory.click.ClickType
+import net.minestom.server.item.ItemAnimation
 import net.minestom.server.item.ItemStack
-import net.minestom.server.listener.PlayerHeldListener
+import net.minestom.server.item.Material
+import net.minestom.server.item.component.Consumable
 import net.minestom.server.potion.Potion
 import net.minestom.server.potion.PotionEffect
+import net.minestom.server.sound.SoundEvent
+import twizzy.tech.game.items.containers.PetPouch
 import twizzy.tech.game.RegionManager
-import twizzy.tech.game.Engine
 import twizzy.tech.game.items.notes.Money
 import twizzy.tech.game.items.pickaxe.Pickaxe
 import twizzy.tech.game.items.pickaxe.boosters.Experience
+import twizzy.tech.game.pets.Pet
 import twizzy.tech.player.PlayerData
 import twizzy.tech.util.Worlds
 import java.math.BigDecimal
 import java.time.Duration
+import java.util.UUID
+import javax.xml.crypto.Data
 
 class ItemInteractions(private val minecraftServer: MinecraftServer, private val regionManager: RegionManager, private val worlds: Worlds) {
+
+    // Track recent backpack sell interactions to prevent spam
+    private val recentBackpackSells = mutableMapOf<UUID, Long>()
+    private val BACKPACK_SELL_COOLDOWN = 500L // 500ms cooldown
 
     init {
         // Create a node that listens specifically for player-related events
@@ -43,6 +52,10 @@ class ItemInteractions(private val minecraftServer: MinecraftServer, private val
 
         // Register the item drop listener to handle item drops
         playerNode.addSuspendingListener(minecraftServer, ItemDropEvent::class.java) { event ->
+
+            if (event.itemStack.material() == Material.BUNDLE) {
+                event.isCancelled = true
+            }
 
             // Get the player's eye level position
             val playerEyeLevelPosition = event.player.position.add(0.0, event.player.eyeHeight, 0.0)
@@ -61,7 +74,7 @@ class ItemInteractions(private val minecraftServer: MinecraftServer, private val
         }
 
         MinecraftServer.getGlobalEventHandler().addSuspendingListener(minecraftServer, PickupItemEvent::class.java) { event ->
-            var itemStack = event.itemStack
+            val itemStack = event.itemStack
 
             val player = event.livingEntity as Player
             player.inventory.addItemStack(itemStack)
@@ -71,10 +84,10 @@ class ItemInteractions(private val minecraftServer: MinecraftServer, private val
         MinecraftServer.getGlobalEventHandler().addListener(InventoryPreClickEvent::class.java) { event ->
             val player = event.player
             val clickedItem = event.clickedItem
-            val cursorItem = event.cursorItem
+            val cursorItem = player.inventory.cursorItem
 
             // Check if this is an item-on-item interaction (player has item on cursor and clicks another item)
-            if (!cursorItem.isAir && !clickedItem.isAir && event.clickType == ClickType.LEFT_CLICK) {
+            if (!cursorItem.isAir && !clickedItem.isAir && event.click is Click.Left) {
                 if (shouldHandleInteraction(cursorItem, clickedItem)) {
                     event.isCancelled = true
                     handleItemOnItemInteraction(player, cursorItem, clickedItem, event)
@@ -106,15 +119,15 @@ class ItemInteractions(private val minecraftServer: MinecraftServer, private val
                     player.removeEffect(PotionEffect.SPEED)
                 }
 
-                // Check for Speed enchant and apply speed effect
+                // Check for Haste enchant and apply haste effect
                 val hasteEnchant = pickaxe.getEnchantByName("Haste")
                 if (hasteEnchant != null) {
-                    // Remove existing speed effect if present
+                    // Remove existing haste effect if present
                     player.removeEffect(PotionEffect.HASTE)
-                    // Apply speed effect with amplifier = enchant level - 1, duration -1 (infinite)
+                    // Apply haste effect with amplifier = enchant level - 1, duration -1 (infinite)
                     player.addEffect(Potion(PotionEffect.HASTE, hasteEnchant.level -1, -1))
                 } else {
-                    // Remove speed effect if not present on pickaxe
+                    // Remove haste effect if not present on pickaxe
                     player.removeEffect(PotionEffect.HASTE)
                 }
             } else {
@@ -123,10 +136,122 @@ class ItemInteractions(private val minecraftServer: MinecraftServer, private val
                 player.level = 0
                 // Remove speed effect if not holding a pickaxe
                 player.removeEffect(PotionEffect.SPEED)
+                player.removeEffect(PotionEffect.HASTE)
             }
 
         }
 
+        // BACK PACK INTERACTIONS
+        MinecraftServer.getGlobalEventHandler().addSuspendingListener(minecraftServer, PlayerUseItemEvent::class.java) { event ->
+            val player = event.player
+            val itemStack = event.itemStack
+
+            if (itemStack.material() == Material.NETHER_STAR) {
+                event.isCancelled = true
+                twizzy.tech.commands.Backpack().openBackpack(player)
+            }
+        }
+
+        // PET FOOD INTERACTIONS
+        MinecraftServer.getGlobalEventHandler().addSuspendingListener(minecraftServer, PlayerUseItemEvent::class.java) { event ->
+            val player = event.player
+            val itemStack = event.itemStack
+
+            val pouchItem = player.inventory.itemStacks.find { it.material() == Material.BUNDLE } ?: return@addSuspendingListener
+            val petPouch = PetPouch.fromItemStack(pouchItem) ?: return@addSuspendingListener
+
+            val allPets = petPouch.getAllPets().mapNotNull { twizzy.tech.game.pets.Pet.fromItemStack(it) }
+            val canBeEaten = allPets.any { it.canEat(itemStack.material()) }
+
+            if (canBeEaten) {
+                // Feed pets directly instead of using complex animation detection
+                val petsToFeed = allPets.filter { it.canEat(itemStack.material()) }
+                var fedAtLeastOne = false
+
+                petsToFeed.forEach { pet ->
+                    println("Feeding pet with UID: ${pet.uid}")
+                    println("  Before feeding: Hunger=${pet.hunger}, Happiness=${pet.happiness}")
+                    pet.feed()
+                    println("  After feeding: Hunger=${pet.hunger}, Happiness=${pet.happiness}")
+                    fedAtLeastOne = true
+
+                    // Convert the updated pet back to an ItemStack
+                    val updatedPetItemStack = pet.toItemStack()
+
+                    // Find and update the pet in the main contents map by UID
+                    val contentEntry = petPouch.contents.entries.find { (_, item) ->
+                        Pet.fromItemStack(item)?.uid == pet.uid
+                    }
+                    contentEntry?.let { (slot, _) ->
+                        petPouch.contents[slot] = updatedPetItemStack
+                    }
+
+                    // Find and update the pet in the selected pets list by UID
+                    val selectedIndex = petPouch.selectedPets.indexOfFirst { item ->
+                        item != null && Pet.fromItemStack(item)?.uid == pet.uid
+                    }
+                    if (selectedIndex != -1) {
+                        petPouch.selectedPets[selectedIndex] = updatedPetItemStack
+                    }
+                }
+
+                if (fedAtLeastOne) {
+                    // Remove one item from the stack
+                    val newAmount = itemStack.amount() - 1
+                    if (newAmount > 0) {
+                        player.itemInMainHand = itemStack.withAmount(newAmount)
+                    } else {
+                        player.itemInMainHand = ItemStack.AIR
+                    }
+
+                    // Update the pet pouch with fed pets
+                    val updatedPouchItem = PetPouch.savePetPouch(petPouch, pouchItem)
+                    player.inventory.setItemStack(player.inventory.itemStacks.indexOf(pouchItem), updatedPouchItem)
+
+                    // Send feedback message
+                    val materialName = itemStack.material().name().lowercase().replace('_', ' ')
+                    player.sendMessage(Component.text("You fed your pets $materialName! Their hunger and happiness increased.", NamedTextColor.GREEN))
+
+                    // Cancel the original use event to prevent default behavior
+                    event.isCancelled = true
+                }
+            }
+        }
+
+        // BACK PACK INTERACTIONS
+        MinecraftServer.getGlobalEventHandler().addSuspendingListener(minecraftServer, PlayerUseItemEvent::class.java) { event ->
+            val player = event.player
+            val itemStack = event.itemStack
+
+            if (itemStack.material() == Material.BUNDLE) {
+                event.isCancelled = true
+                twizzy.tech.commands.Pets().openPetPouch(player)
+            }
+        }
+
+
+        MinecraftServer.getGlobalEventHandler().addSuspendingListener(minecraftServer,
+            PlayerHandAnimationEvent::class.java) { event ->
+            val player = event.player
+            val itemStack = event.player.itemInMainHand
+
+            if (itemStack.material() == Material.NETHER_STAR) {
+                // Check cooldown to prevent spam
+                val currentTime = System.currentTimeMillis()
+                val lastSell = recentBackpackSells[player.uuid] ?: 0L
+
+                if (currentTime - lastSell < BACKPACK_SELL_COOLDOWN) {
+                    event.isCancelled = true
+                    return@addSuspendingListener
+                }
+
+                // Update the last sell time
+                recentBackpackSells[player.uuid] = currentTime
+
+                event.isCancelled = true
+                twizzy.tech.commands.Backpack().sellBlockpack(player)
+            }
+        }
 
         // MONEY NOTE INTERACTIONS
         MinecraftServer.getGlobalEventHandler().addSuspendingListener(minecraftServer, PlayerUseItemEvent::class.java) { event ->
@@ -252,26 +377,36 @@ class ItemInteractions(private val minecraftServer: MinecraftServer, private val
         event: InventoryPreClickEvent
     ) {
         if (!booster.isActive()) {
-            player.sendMessage(Component.text("§cThis experience booster has expired!", NamedTextColor.RED))
+            player.sendMessage(Component.text("This experience booster has expired!", NamedTextColor.RED))
             return
         }
+
         val updatedPickaxe = pickaxe.addBooster(booster)
-        val newCursorItem = if (event.cursorItem.amount() > 1) {
-            event.cursorItem.withAmount(event.cursorItem.amount() - 1)
+
+        // Get the current cursor item from player inventory
+        val currentCursorItem = event.player.inventory.cursorItem
+        val newCursorItem = if (currentCursorItem.amount() > 1) {
+            currentCursorItem.withAmount(currentCursorItem.amount() - 1)
         } else {
             ItemStack.AIR
         }
+
+        // Update the clicked item with the enhanced pickaxe
         event.inventory.setItemStack(event.slot, updatedPickaxe.toItemStack())
+        // Update the cursor item
         event.player.inventory.cursorItem = newCursorItem
+
         val multiplierText = if (booster.multiplier == booster.multiplier.toInt().toDouble()) {
             "${booster.multiplier.toInt()}x"
         } else {
             String.format("%.1fx", booster.multiplier)
         }
         val durationText = booster.getRemainingDuration()?.let { "${it}s" } ?: "Permanent"
+
         player.sendMessage(
-            Component.text("§aSuccessfully applied §f${multiplierText} Experience Booster §a(${durationText}) §ato your pickaxe!")
+            Component.text("Successfully applied ${multiplierText} Experience Booster (${durationText}) to your pickaxe!", NamedTextColor.GREEN)
         )
+
         player.playSound(
             Sound.sound(
                 Key.key("minecraft:entity.experience_orb.pickup"),

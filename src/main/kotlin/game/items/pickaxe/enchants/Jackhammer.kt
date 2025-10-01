@@ -1,6 +1,5 @@
 package twizzy.tech.game.items.pickaxe.enchants
 
-import kotlinx.coroutines.launch
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.sound.Sound
 import net.kyori.adventure.text.Component
@@ -9,7 +8,6 @@ import net.minestom.server.entity.Player
 import net.minestom.server.instance.batch.AbsoluteBlockBatch
 import net.minestom.server.instance.block.Block
 import twizzy.tech.game.items.pickaxe.Pickaxe
-import twizzy.tech.game.items.pickaxe.Enchant.EnchantConfig
 import twizzy.tech.game.items.pickaxe.Enchant.ConfigurableBlockEnchant
 import twizzy.tech.util.YamlFactory
 
@@ -96,7 +94,7 @@ class Jackhammer(level: Int) : ConfigurableBlockEnchant(NAME, level, config) {
         val backpackBooster = pickaxe.activeBoostersOf<twizzy.tech.game.items.pickaxe.boosters.Backpack>().maxByOrNull { it.multiplier }
         for ((blockType, count) in blockTypeCounts) {
             val finalCount = backpackBooster?.applyBooster(count) ?: count
-            twizzy.tech.player.PlayerData.addToBackpack(player.uuid, blockType, finalCount)
+            twizzy.tech.player.PlayerData.addToBlockpack(player.uuid, blockType, finalCount)
         }
 
         // Send activation message to player

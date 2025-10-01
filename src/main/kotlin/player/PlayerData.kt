@@ -1,11 +1,17 @@
 package twizzy.tech.player
 
+import eu.koboo.minestom.stomui.api.PlayerView
+import eu.koboo.minestom.stomui.api.item.ModifiableItem
+import eu.koboo.minestom.stomui.api.item.ViewItem
 import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import net.kyori.adventure.nbt.BinaryTagIO
 import net.kyori.adventure.nbt.CompoundBinaryTag
 import net.minestom.server.inventory.PlayerInventory
 import net.minestom.server.item.ItemStack
+import net.minestom.server.item.Material
 import net.minestom.server.utils.mojang.MojangUtils
 import org.bson.Document
 import twizzy.tech.util.MongoStream
@@ -15,6 +21,10 @@ import java.io.IOException
 import java.math.BigDecimal
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
+import kotlin.random.Random
 
 /**
  * Represents a player's persistent data and provides caching functionality.
@@ -24,10 +34,14 @@ class PlayerData(
     var balance: BigDecimal = BigDecimal.ZERO,
     var blocksMined: Int = 0,
     val inventory: MutableMap<String, InventoryItem> = mutableMapOf(),
-    val backpack: MutableMap<String, Int> = mutableMapOf(),
+    val blockpack: MutableMap<String, Int> = mutableMapOf(),
+    val backpack: MutableMap<String, InventoryItem> = mutableMapOf(), // New backpack system
     var souls: BigDecimal = BigDecimal.ZERO, // New currency
     var tokens: BigDecimal = BigDecimal.ZERO, // New currency
     var rank: Int = 0,
+    var kills: Int = 0,
+    var deaths: Int = 0,
+    var cellID: String? = null
 ) {
     /**
      * Represents an item in a player's inventory
@@ -40,7 +54,7 @@ class PlayerData(
 
     /**
      * Converts this PlayerData instance to a MongoDB Document
-     * Note: Inventory and backpack are stored in YAML, not MongoDB
+     * Note: Inventory and blockpack are stored in YAML, not MongoDB
      */
     fun toDocument(): Document {
         return Document()
@@ -50,12 +64,22 @@ class PlayerData(
             .append("souls", souls)
             .append("tokens", tokens)
             .append("rank", rank)
+            .append("kills", kills)
+            .append("deaths", deaths)
+            .append("cellID", cellID)
     }
 
     companion object {
         private val playerCache = ConcurrentHashMap<UUID, PlayerData>()
         private const val PLAYERS_DIR = "players"
         private val mongo = MongoStream.getInstance()
+
+        // File operation synchronization
+        private val fileLocks = ConcurrentHashMap<UUID, Mutex>()
+
+        private fun getFileLock(uuid: UUID): Mutex {
+            return fileLocks.computeIfAbsent(uuid) { Mutex() }
+        }
 
         /**
          * Gets player data from the cache, or loads from MongoDB if not present.
@@ -178,8 +202,24 @@ class PlayerData(
             }
 
             val rank = document.getInteger("rank") ?: 0
+            val kills = document.getInteger("kills") ?: 0
+            val deaths = document.getInteger("deaths") ?: 0
+            val cellID = document.getString("cellID")
 
-            return PlayerData(uuid, balance, blocksMined, mutableMapOf(), mutableMapOf(), souls, tokens, rank)
+            return PlayerData(
+                uuid,
+                balance,
+                blocksMined,
+                mutableMapOf(),
+                mutableMapOf(),
+                mutableMapOf(),
+                souls,
+                tokens,
+                rank,
+                kills,
+                deaths,
+                cellID
+            )
         }
 
         /**
@@ -217,11 +257,7 @@ class PlayerData(
          * @return true if successful, false if player data not found
          */
         suspend fun incrementBlocksMined(uuid: UUID, amount: Int = 1): Boolean {
-
-            val playerData = getFromCache(uuid)
-            if (playerData == null) {
-                return false
-            }
+            val playerData = getFromCache(uuid) ?: return false
 
             val oldBlocksMined = playerData.blocksMined
             playerData.blocksMined += amount
@@ -285,34 +321,35 @@ class PlayerData(
          * @param slot The inventory slot
          * @return The InventoryItem, or null if not found
          */
-        suspend fun getInventoryItem(uuid: UUID, slot: String): InventoryItem? = getFromCache(uuid)?.inventory?.get(slot)
+        suspend fun getInventoryItem(uuid: UUID, slot: String): InventoryItem? =
+            getFromCache(uuid)?.inventory?.get(slot)
 
         /**
-         * Adds an item to the player's backpack
+         * Adds an item to the player's blockpack
          * @param uuid Player's UUID
          * @param itemId The Minecraft item ID
          * @param amount The amount to add
          * @return true if successful, false if player data not found
          */
-        suspend fun addToBackpack(uuid: UUID, itemId: String, amount: Int): Boolean {
+        suspend fun addToBlockpack(uuid: UUID, itemId: String, amount: Int): Boolean {
             val playerData = getFromCache(uuid) ?: return false
-            val currentAmount = playerData.backpack.getOrDefault(itemId, 0)
-            playerData.backpack[itemId] = currentAmount + amount
+            val currentAmount = playerData.blockpack.getOrDefault(itemId, 0)
+            playerData.blockpack[itemId] = currentAmount + amount
             // Update scoreboard automatically
             twizzy.tech.util.ComponentSidebar.updateScoreboardForPlayer(uuid)
             return true
         }
 
         /**
-         * Removes an item from the player's backpack
+         * Removes an item from the player's blockpack
          * @param uuid Player's UUID
          * @param itemId The Minecraft item ID
          * @param amount The amount to remove
          * @return true if successful, false if player data not found or insufficient items
          */
-        suspend fun removeFromBackpack(uuid: UUID, itemId: String, amount: Int): Boolean {
+        suspend fun removeFromBlockpack(uuid: UUID, itemId: String, amount: Int): Boolean {
             val playerData = getFromCache(uuid) ?: return false
-            val currentAmount = playerData.backpack.getOrDefault(itemId, 0)
+            val currentAmount = playerData.blockpack.getOrDefault(itemId, 0)
 
             if (currentAmount < amount) {
                 return false
@@ -320,9 +357,9 @@ class PlayerData(
 
             val newAmount = currentAmount - amount
             if (newAmount > 0) {
-                playerData.backpack[itemId] = newAmount
+                playerData.blockpack[itemId] = newAmount
             } else {
-                playerData.backpack.remove(itemId)
+                playerData.blockpack.remove(itemId)
             }
 
             // Update scoreboard automatically
@@ -331,20 +368,20 @@ class PlayerData(
         }
 
         /**
-         * Gets a player's backpack contents
+         * Gets a player's blockpack contents
          * @param uuid Player's UUID
          * @return Map of item ID to count, or null if player data not found
          */
-        suspend fun getBackpack(uuid: UUID): Map<String, Int>? = getFromCache(uuid)?.backpack
+        suspend fun getBlockpack(uuid: UUID): Map<String, Int>? = getFromCache(uuid)?.blockpack
 
         /**
-         * Gets the count of a specific item in a player's backpack
+         * Gets the count of a specific item in a player's blockpack
          * @param uuid Player's UUID
          * @param itemId The Minecraft item ID
-         * @return The item count, or 0 if player data not found or item not in backpack
+         * @return The item count, or 0 if player data not found or item not in blockpack
          */
-        suspend fun getBackpackAmount(uuid: UUID, itemId: String): Int =
-            getFromCache(uuid)?.backpack?.getOrDefault(itemId, 0) ?: 0
+        suspend fun getBlockpackAmount(uuid: UUID, itemId: String): Int =
+            getFromCache(uuid)?.blockpack?.getOrDefault(itemId, 0) ?: 0
 
         // === TOKENS MANAGEMENT ===
 
@@ -421,11 +458,11 @@ class PlayerData(
         suspend fun getSouls(uuid: UUID): BigDecimal? = getFromCache(uuid)?.souls
 
         /**
-         * Sells all items in a player's backpack and adds the value to their balance
+         * Sells all items in a player's blockpack and adds the value to their balance
          * @param uuid Player's UUID
          * @return SellResult containing success status, total value, items sold, and error message if any
          */
-        suspend fun sellBackpack(uuid: UUID): SellResult {
+        suspend fun sellBlockpack(uuid: UUID): SellResult {
             val playerData = getFromCache(uuid) ?: return SellResult(
                 success = false,
                 totalValue = BigDecimal.ZERO,
@@ -433,48 +470,48 @@ class PlayerData(
                 errorMessage = "Unable to load your player data."
             )
 
-            val backpack = playerData.backpack
+            val blockpack = playerData.blockpack
 
-            if (backpack.isEmpty()) {
+            if (blockpack.isEmpty()) {
                 return SellResult(
                     success = false,
                     totalValue = BigDecimal.ZERO,
                     itemsSold = 0,
-                    errorMessage = "Your backpack is empty - nothing to sell!"
+                    errorMessage = "Your blockpack is empty - nothing to sell!"
                 )
             }
 
             // Calculate total sell value using the game engine
-            val totalValue = twizzy.tech.gameEngine.calculateTotalSellValue(backpack)
+            val totalValue = twizzy.tech.gameEngine.calculateTotalSellValue(blockpack)
 
             if (totalValue <= BigDecimal.ZERO) {
                 return SellResult(
                     success = false,
                     totalValue = BigDecimal.ZERO,
                     itemsSold = 0,
-                    errorMessage = "No valuable items found in your backpack."
+                    errorMessage = "No valuable items found in your blockpack."
                 )
             }
 
             // Calculate total items being sold
-            val totalItems = backpack.values.sum()
+            val totalItems = blockpack.values.sum()
 
-            // Create a backup of the backpack for rollback
-            val backpackBackup = backpack.toMap()
+            // Create a backup of the blockpack for rollback
+            val blockpackBackup = blockpack.toMap()
 
             try {
                 // Add to player's balance
                 playerData.balance = playerData.balance.add(totalValue)
 
-                // Clear the backpack
-                backpack.clear()
+                // Clear the blockpack
+                blockpack.clear()
 
                 // Save the updated data
                 val mongoStream = MongoStream.getInstance()
                 mongoStream.savePlayerData(playerData)
-                saveBackpack(uuid)
+                saveBlockpack(uuid)
 
-                // Update scoreboard automatically (balance and backpack count changed)
+                // Update scoreboard automatically (balance and blockpack count changed)
                 twizzy.tech.util.ComponentSidebar.updateScoreboardForPlayer(uuid)
 
                 return SellResult(
@@ -487,8 +524,8 @@ class PlayerData(
             } catch (e: Exception) {
                 // Rollback the changes if saving fails
                 playerData.balance = playerData.balance.subtract(totalValue)
-                backpack.clear()
-                backpack.putAll(backpackBackup)
+                blockpack.clear()
+                blockpack.putAll(blockpackBackup)
 
                 return SellResult(
                     success = false,
@@ -501,7 +538,7 @@ class PlayerData(
         }
 
         /**
-         * Result of a backpack sell operation
+         * Result of a blockpack sell operation
          */
         data class SellResult(
             val success: Boolean,
@@ -655,12 +692,12 @@ class PlayerData(
         }
 
         /**
-         * Loads player backpack data from YAML file
+         * Loads player blockpack data from YAML file
          * @param uuid Player UUID
          * @return true if successful, false otherwise
          */
         @Suppress("UNCHECKED_CAST")
-        suspend fun loadBackpack(uuid: UUID): Boolean {
+        suspend fun loadBlockpack(uuid: UUID): Boolean {
             val playerData = getFromCache(uuid) ?: return false
             val playerFile = File("$PLAYERS_DIR/${uuid}.yml")
 
@@ -672,17 +709,17 @@ class PlayerData(
             try {
                 val yamlData = YamlFactory.loadConfig(playerFile)
 
-                // Load backpack
-                val backpackData = yamlData["backpack"] as? Map<String, Any>
-                playerData.backpack.clear() // Clear existing backpack before loading
-                backpackData?.forEach { (itemId, countObj) ->
+                // Load blockpack
+                val blockpackData = yamlData["blockpack"] as? Map<String, Any>
+                playerData.blockpack.clear() // Clear existing blockpack before loading
+                blockpackData?.forEach { (itemId, countObj) ->
                     val count = when (countObj) {
                         is Int -> countObj
                         is Double -> countObj.toInt()
                         is String -> countObj.toIntOrNull() ?: 0
                         else -> 0
                     }
-                    playerData.backpack[itemId] = count
+                    playerData.blockpack[itemId] = count
                 }
 
                 return true
@@ -693,11 +730,11 @@ class PlayerData(
         }
 
         /**
-         * Saves player backpack data to YAML file
+         * Saves player blockpack data to YAML file
          * @param uuid Player UUID
          * @return true if successful, false otherwise
          */
-        suspend fun saveBackpack(uuid: UUID): Boolean {
+        suspend fun saveBlockpack(uuid: UUID): Boolean {
             val playerData = getFromCache(uuid) ?: return false
             val playerFile = File("$PLAYERS_DIR/${uuid}.yml")
 
@@ -712,8 +749,8 @@ class PlayerData(
                     mutableMapOf()
                 }
 
-                // Update backpack data
-                yamlData["backpack"] = playerData.backpack
+                // Update blockpack data
+                yamlData["blockpack"] = playerData.blockpack
 
                 // Save to file
                 YamlFactory.saveConfig(yamlData, playerFile)
@@ -746,11 +783,13 @@ class PlayerData(
             val config = YamlFactory.loadConfig(File("game/config.yml"))
             return config["leaderboard"] as? Map<String, Any> ?: emptyMap()
         }
+
         private fun getLeaderboardRefreshIntervalMs(): Long {
             val intervalStr = getLeaderboardConfig()["refreshInterval"]?.toString() ?: "10m"
             val seconds = twizzy.tech.util.DurationParser.parse(intervalStr) ?: 600L
             return seconds * 1000L
         }
+
         fun getLeaderboardPerPage(): Int = (getLeaderboardConfig()["perPage"] as? Int) ?: 10
         fun getLeaderboardMaxPages(): Int = (getLeaderboardConfig()["maxPages"] as? Int) ?: 10
 
@@ -783,13 +822,17 @@ class PlayerData(
                     .collect { doc ->
                         val id = doc.getString("_id")
                         val value = doc.get(field)
-                        val uuid = try { UUID.fromString(id) } catch (_: Exception) { null }
+                        val uuid = try {
+                            UUID.fromString(id)
+                        } catch (_: Exception) {
+                            null
+                        }
                         if (uuid != null && value is Number) {
                             leaderboard.add(uuid to value)
                         }
                     }
             } catch (e: Exception) {
-                println("[PrisonCore/Leaderboard] Failed to refresh leaderboard: "+e.message)
+                println("[PrisonCore/Leaderboard] Failed to refresh leaderboard: " + e.message)
             }
             leaderboardCache[type] = leaderboard
             leaderboardTimestamps[type] = System.currentTimeMillis()
@@ -835,5 +878,205 @@ class PlayerData(
             val nextRefresh = (lastRefresh + refreshMs) - now
             return nextRefresh.coerceAtLeast(0)
         }
-    }
+
+        // === KILLS AND DEATHS MANAGEMENT ===
+
+        /**
+         * Increments a player's kill count
+         * @param uuid Player's UUID
+         * @param amount Amount of kills to add (defaults to 1)
+         * @return true if successful, false if player data not found
+         */
+        suspend fun addKills(uuid: UUID, amount: Int = 1): Boolean {
+            val playerData = getFromCache(uuid) ?: return false
+            playerData.kills += amount
+            // Update scoreboard automatically
+            twizzy.tech.util.ComponentSidebar.updateScoreboardForPlayer(uuid)
+            return true
+        }
+
+        /**
+         * Increments a player's death count
+         * @param uuid Player's UUID
+         * @param amount Amount of deaths to add (defaults to 1)
+         * @return true if successful, false if player data not found
+         */
+        suspend fun addDeaths(uuid: UUID, amount: Int = 1): Boolean {
+            val playerData = getFromCache(uuid) ?: return false
+            playerData.deaths += amount
+            // Update scoreboard automatically
+            twizzy.tech.util.ComponentSidebar.updateScoreboardForPlayer(uuid)
+            return true
+        }
+
+        /**
+         * Gets a player's kill count
+         * @param uuid Player's UUID
+         * @return The player's kills, or null if player data not found
+         */
+        suspend fun getKills(uuid: UUID): Int? = getFromCache(uuid)?.kills
+
+        /**
+         * Gets a player's death count
+         * @param uuid Player's UUID
+         * @return The player's deaths, or null if player data not found
+         */
+        suspend fun getDeaths(uuid: UUID): Int? = getFromCache(uuid)?.deaths
+
+        /**
+         * Gets a player's kill/death ratio
+         * @param uuid Player's UUID
+         * @return The player's K/D ratio, or null if player data not found
+         */
+        suspend fun getKDRatio(uuid: UUID): Double? {
+            val playerData = getFromCache(uuid) ?: return null
+            return if (playerData.deaths == 0) {
+                playerData.kills.toDouble()
+            } else {
+                playerData.kills.toDouble() / playerData.deaths.toDouble()
+            }
+        }
+
+        // === CELL MANAGEMENT ===
+
+        /**
+         * Sets a player's cell ID
+         * @param uuid Player's UUID
+         * @param cellID The cell ID to set (null to remove from cell)
+         * @return true if successful, false if player data not found
+         */
+        suspend fun setCellID(uuid: UUID, cellID: String?): Boolean {
+            val playerData = getFromCache(uuid) ?: return false
+            playerData.cellID = cellID
+            // Update scoreboard automatically
+            twizzy.tech.util.ComponentSidebar.updateScoreboardForPlayer(uuid)
+            return true
+        }
+
+        /**
+         * Gets a player's cell ID
+         * @param uuid Player's UUID
+         * @return The player's cell ID, or null if player data not found or not in a cell
+         */
+        suspend fun getCellID(uuid: UUID): String? = getFromCache(uuid)?.cellID
+        }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

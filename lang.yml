@@ -2,6 +2,212 @@
 # All messages and command usage strings
 
 commands:
+  cell:
+    help:
+      header: "&6Cell Commands:"
+      usage:
+        - "&e/cell create <name> &7- Create a new cell"
+        - "&e/cell delete &7- Delete your cell"
+        - "&e/cell join <name> &7- Join a public cell"
+        - "&e/cell leave &7- Leave your current cell"
+        - "&e/cell info [name] &7- Show cell information"
+        - "&e/cell list &7- List all public cells"
+        - "&e/cell invite <player> &7- Invite a player to your cell"
+        - "&e/cell kick <player> &7- Kick a player from your cell"
+        - "&e/cell revoke <player> &7- Revoke an invitation"
+        - "&e/cell invites &7- View pending invitations"
+        - "&e/cell desc <description> &7- Set cell description"
+        - "&e/cell announce <message> &7- Make an announcement"
+        - "&e/cell promote <player> &7- Promote a player to next role"
+        - "&e/cell demote <player> &7- Demote a player to previous role"
+        - "&e/cell deposit <amount> &7- Deposit money into your cell"
+
+    create:
+      success: "&aCell '{name}' has been created successfully!"
+      already_in_cell: "&cYou are already in a cell. Leave your current cell first."
+      name_taken: "&cA cell with the name '{name}' already exists."
+      insufficient_rank: "&cYou need rank {required} or higher to create a cell."
+      data_error: "&cFailed to load your player data."
+      error: "&cFailed to create cell due to an error."
+      invalid_name: "&cCell name must be between 3-16 characters long."
+      invalid_characters: "&cCell name can only contain letters, numbers, and underscores."
+
+    delete:
+      success: "&aCell '{name}' has been deleted successfully."
+      not_in_cell: "&cYou are not in a cell."
+      not_found: "&cCell not found."
+      not_leader: "&cOnly the cell leader can delete the cell."
+      error: "&cFailed to delete cell due to an error."
+
+    join:
+      success: "&aYou have joined cell '{name}'!"
+      success_invitation: "&aYou have accepted the invitation and joined cell '{name}'!"
+      not_found: "&cCell '{name}' not found."
+      already_in_cell: "&cYou are already in a cell."
+      full: "&cThis cell is full."
+      private: "&cThis cell is private and cannot be joined."
+      no_invitation: "&cYou don't have an invitation to cell '{name}'."
+      error: "&cFailed to join cell due to an error."
+
+    leave:
+      success: "&aYou have left your cell."
+      not_in_cell: "&cYou are not in a cell."
+      not_found: "&cCell not found."
+      leader_cannot_leave: "&cAs the leader, you cannot leave the cell. Delete it instead or transfer leadership."
+      error: "&cFailed to leave cell due to an error."
+
+    info:
+      format:
+        - "&6&m                                                            "
+        - "&6{name} &7[{online}&7/{count}]{status} &8| &fLvL. {level}"
+        - "&6Announcement: &e{announcement}"
+        - "&6Leader: {leader}"
+        - "&6Co-Leaders: {coleaders}"
+        - "&6Captains: {captains}"
+        - "&6Members: {members}"
+        - "&6Created: &e{date}"
+        - "&6Description: &e{description}"
+        - "&6Cell Balance: &e${balance}"
+        - " {upgrade_info}"
+        - "&6&m                                                            "
+      not_in_cell: "&cYou are not in a cell. Use '/cell info <name>' to view another cell."
+      not_found: "&cCell '{name}' not found."
+
+    list:
+      empty: "&cNo cells with online members found."
+      header: "&6Online Cells ({count}):"
+      entry: "&e- {name} &7(Leader: {leader}, Online: &a{online}&7/{members})"
+
+    invite:
+      sent: "&aInvitation sent to {player}!"
+      not_in_cell: "&cYou are not in a cell."
+      not_leader: "&cOnly the cell leader can invite players."
+      player_not_found: "&cPlayer '{player}' not found."
+      already_in_cell: "&c{player} is already in a cell."
+      cell_full: "&cYour cell is full."
+      already_invited: "&c{player} already has a pending invitation."
+      cell_not_found: "&cCell not found."
+      no_invitation: "&cNo invitation found."
+      error: "&cFailed to send invitation."
+
+      # Messages for invitation notifications
+      received:
+        - "&6&l▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+        - "&6You have been invited to join cell '&e{cell}&6' by &e{inviter}&6!"
+        - "&7Click: &a[JOIN] &7or &c[DECLINE]"
+        - "&6&l▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+
+      accepted_inviter: "&a{player} has accepted your invitation to join cell '{cell}'!"
+      declined_inviter: "&c{player} has declined your invitation to join cell '{cell}'."
+      revoked_invitee: "&cYour invitation to join cell '{cell}' has been revoked by {leader}."
+
+    decline:
+      success: "&aYou have declined the invitation to cell '{cell}'."
+      cell_not_found: "&cCell '{cell}' not found."
+      no_invitation: "&cYou don't have an invitation to cell '{cell}'."
+      error: "&cFailed to decline invitation."
+
+    revoke:
+      success: "&aYou have revoked the invitation to {player}."
+      not_in_cell: "&cYou are not in a cell."
+      not_leader: "&cOnly the cell leader can revoke invitations."
+      player_not_found: "&cPlayer '{player}' not found."
+      no_invitation: "&c{player} doesn't have a pending invitation."
+      cell_not_found: "&cCell not found."
+      error: "&cFailed to revoke invitation."
+
+    invites:
+      header: "&6&l▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+      pending_header: "&6Pending Invitations ({count}):"
+      pending_entry: "&e- {cell} &7(from {inviter})"
+      no_pending: "&7No pending invitations."
+      sent_header: "&6Sent Invitations ({count}):"
+      sent_entry: "&e- {player} &7(to {cell})"
+      no_sent: "&7No sent invitations."
+      footer: "&6&l▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+
+    kick:
+      success: "&aYou have kicked {player} from your cell."
+      not_in_cell: "&cYou are not in a cell."
+      not_leader: "&cOnly the cell leader can kick players."
+      player_not_found: "&cPlayer '{player}' not found."
+      not_member: "&c{player} is not a member of your cell."
+      cannot_kick_leader: "&cYou cannot kick the cell leader."
+      insufficient_permission: "&cYou don't have permission to kick this player."
+      kicked: "&cYou have been kicked from cell '{cell}' by {leader}."
+      cell_not_found: "&cCell not found."
+      error: "&cFailed to kick player due to an error."
+
+    description:
+      success: "&aCell description has been updated successfully!"
+      removed: "&aCell description has been removed successfully!"
+      not_in_cell: "&cYou are not in a cell."
+      not_leader: "&cOnly the cell leader can set the description."
+      cell_not_found: "&cCell not found."
+      error: "&cFailed to update description due to an error."
+
+    announce:
+      success: "&aAnnouncement has been sent to all cell members!"
+      removed: "&aCell announcement has been removed successfully!"
+      not_in_cell: "&cYou are not in a cell."
+      not_leader: "&cOnly the cell leader can make announcements."
+      cell_not_found: "&cCell not found."
+      error: "&cFailed to send announcement due to an error."
+      notification: "&6[&eCell Announcement&6] &e{leader} &6in cell '&e{cell}&6': &f{announcement}"
+
+    role:
+      promote_success: "&aYou have promoted {player} to {role}!"
+      demote_success: "&aYou have demoted {player} to {role}!"
+      not_in_cell: "&cYou are not in a cell."
+      no_permission: "&cYou don't have permission to promote or demote players."
+      player_not_found: "&cPlayer '{player}' not found."
+      not_member: "&c{player} is not a member of your cell."
+      invalid_role: "&cInvalid role. Valid roles: {roles}"
+      invalid_role_target: "&cCannot change to that role."
+      not_promotion: "&cThat would not be a promotion for {player}."
+      not_demotion: "&cThat would not be a demotion for {player}."
+      insufficient_permission_promote: "&cYou cannot promote to {role} role."
+      insufficient_permission_demote: "&cYou don't have permission to demote this player."
+      cell_not_found: "&cCell not found."
+      error: "&cFailed to change player role due to an error."
+      promote_notification: "&aYou have been promoted to {role} in cell '{cell}' by {promoter}!"
+      demote_notification: "&cYou have been demoted to {role} in cell '{cell}' by {demoter}."
+      already_max_role: "&c{player} is already at the highest role (Co-Leader)."
+      already_lowest_role: "&c{player} is already at the lowest role (Member)."
+      cannot_promote_leader: "&cYou cannot promote the cell leader."
+      cannot_demote_leader: "&cYou cannot demote the cell leader."
+
+    upgrade:
+      success: "&aCell upgraded to level {level}!"
+      not_in_cell: "&cYou are not in a cell."
+      not_leader: "&cOnly the cell leader can upgrade the cell."
+      insufficient_permission: "&cYou don't have permission to upgrade the cell. Only Co-Leaders and Leaders can upgrade."
+      insufficient_balance: "&cInsufficient cell balance. Required: ${required}, Current: ${current}, Needed: ${needed}"
+      insufficient_balance_generic: "&cYour cell doesn't have enough balance to upgrade."
+      max_level: "&cYour cell is already at the maximum level."
+      cell_not_found: "&cCell not found."
+      error: "&cFailed to upgrade cell due to an error."
+      success_notification: "&aCell '{cell}' has been upgraded to level {level} by {upgrader}!"
+
+    balance:
+      not_in_cell: "&cYou are not in a cell."
+      not_leader: "&cOnly the cell leader can add balance to the cell."
+      invalid_amount: "&cInvalid amount. Please enter a valid number or use notation like 1K, 1M, 1B."
+      positive_only: "&cAmount must be positive."
+      added: "&aAdded ${amount} balance to your cell! New total: ${total}"
+      error: "&cFailed to add balance to cell due to an error."
+
+    deposit:
+      not_in_cell: "&cYou are not in a cell."
+      invalid_amount: "&cInvalid amount. Please enter a valid number or use notation like 1K, 1M, 1B."
+      positive_only: "&cAmount must be positive."
+      insufficient_balance: "&cInsufficient balance. Required: ${required}, Current: ${current}"
+      data_error: "&cFailed to load your player data."
+      balance_error: "&cFailed to update your balance."
+      cell_error: "&cFailed to update cell balance."
+      success: "&aDeposited ${amount} into your cell! Cell balance: ${cell_balance}, Remaining balance: ${remaining_balance}"
+      notification: "&e{player} &adeposited &e${amount} &ainto cell &e{cell}&a!"
+
   world:
     help:
       header: "&6World Commands:"
@@ -352,3 +558,34 @@ common:
   console_only: "&cThis command can only be used from console."
   invalid_player: "&cPlayer '{name}' not found."
   error: "&cAn error occurred: {error}"
+
+
+pets:
+  activated: "&aYour {pet_name} has been activated!"
+  deactivated: "&cYour {pet_name} has been deactivated."
+  selected: "&aYou have selected your {pet_name}."
+  unselected: "&cYou have unselected your {pet_name}."
+  not_found_in_pouch: "&cThe selected pet was not found in your pouch."
+  rename:
+    success: "&aSuccessfully renamed your pet to '{new_name}'!"
+
+  fusion:
+    success: "&aSuccessfully fused {pet1_name} and {pet2_name} into a {fused_pet_name}!"
+    failure: "&cFailed to fuse the pets. They were not compatible."
+    not_enough_pets: "&cYou need to select two different pets to fuse."
+    error: "&cAn error occurred during pet fusion."
+
+  leveling:
+    level_up: "&6&l✦ &eYour pet {pet_name} has leveled up to level &f{level}&e!"
+    max_level: "&cYour pet {pet_name} is already at the maximum level."
+    experience_gained: "&aYour pet {pet_name} gained &f{amount} &aexperience! (&f{current}/{required}&a)"
+
+  petting:
+    success: "&aYou pet your pet! Its happiness is now {happiness}."
+    cooldown: "&cYou can pet your pet again in {cooldown}."
+
+  bat:
+    no_souls_to_deposit: "&7No souls to deposit."
+    souls_deposited: "&aYou deposited {souls} souls to your account!"
+    streak_info: "{streak_days}-day streak"
+    interest_info: "&7Current interest rate: &e{interest_rate}%&7 per 5 minutes{streak_info}"

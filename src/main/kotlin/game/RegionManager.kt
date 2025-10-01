@@ -277,7 +277,7 @@ class RegionManager(private val worlds: Worlds, private val minecraftServer: Min
     /**
      * Gets all regions that contain the given position
      */
-    fun getRegionsAt(worldName: String, position: Pos): List<Region> {
+    fun getRegionsAt(worldName: String?, position: Pos): List<Region> {
         return regions[worldName]?.values?.filter { it.isInRegion(position) } ?: emptyList()
     }
 
@@ -288,43 +288,45 @@ class RegionManager(private val worlds: Worlds, private val minecraftServer: Min
 
 
         MinecraftServer.getGlobalEventHandler().addListener(PrepareAttackEvent::class.java) { event ->
-            val attacker = event.entity as Player
-            val victim = event.target as Player
+            if (event.entity is Player && event.target is Player) {
+                val attacker = event.entity as Player
+                val victim = event.target
 
-            // Get the current world name
-            val worldName = worlds.getWorldNameFromInstance(attacker.instance)
+                // Get the current world name
+                val worldName = worlds.getWorldNameFromInstance(attacker.instance)
 
-            // Get regions from this world
-            val worldRegions = regions[worldName]
+                // Get regions from this world
+                val worldRegions = regions[worldName]
 
-            // Check if either player is in a safezone
-            val attackerPos = attacker.position
-            val victimPos = victim.position
+                // Check if either player is in a safezone
+                val attackerPos = attacker.position
+                val victimPos = victim.position
 
-            // Check if any region with safezone flag contains either player
-            val attackerInSafezone = worldRegions?.values?.any {
-                it.hasFlag("safezone") && it.isInRegion(attackerPos)
-            }
+                // Check if any region with safezone flag contains either player
+                val attackerInSafezone = worldRegions?.values?.any {
+                    it.hasFlag("safezone") && it.isInRegion(attackerPos)
+                }
 
-            val victimInSafezone = worldRegions?.values?.any {
-                it.hasFlag("safezone") && it.isInRegion(victimPos)
-            }
+                val victimInSafezone = worldRegions?.values?.any {
+                    it.hasFlag("safezone") && it.isInRegion(victimPos)
+                }
 
-            // Cancel the attack if either player is in a safezone
-            if (attackerInSafezone == true || victimInSafezone == true) {
-                event.isCancelled = true
+                // Cancel the attack if either player is in a safezone
+                if (attackerInSafezone == true || victimInSafezone == true) {
+                    event.isCancelled = true
 
-                // Notify attacker (only if they're the one in safezone)
-                if (attackerInSafezone == true) {
-                    attacker.sendMessage(
-                        Component.text("You cannot attack players in a safezone.")
-                            .color(NamedTextColor.RED)
-                    )
-                } else {
-                    attacker.sendMessage(
-                        Component.text("That player is in a safezone.")
-                            .color(NamedTextColor.RED)
-                    )
+                    // Notify attacker (only if they're the one in safezone)
+                    if (attackerInSafezone == true) {
+                        attacker.sendMessage(
+                            Component.text("You cannot attack players in a safezone.")
+                                .color(NamedTextColor.RED)
+                        )
+                    } else {
+                        attacker.sendMessage(
+                            Component.text("That player is in a safezone.")
+                                .color(NamedTextColor.RED)
+                        )
+                    }
                 }
             }
         }
@@ -938,7 +940,7 @@ class RegionManager(private val worlds: Worlds, private val minecraftServer: Min
      * @param regionId The ID of the region to delete
      * @return true if the region was deleted, false if it wasn't found
      */
-    suspend fun deleteRegion(worldName: String, regionId: UUID): Boolean {
+    suspend fun deleteRegion(worldName: String?, regionId: UUID): Boolean {
         // Check if the world and region exist
         if (worldName !in regions || regionId !in regions[worldName]!!) {
             return false
@@ -959,7 +961,7 @@ class RegionManager(private val worlds: Worlds, private val minecraftServer: Min
      * @param worldName The name of the world
      * @return List of regions in the world
      */
-    suspend fun getRegions(worldName: String): List<Region> {
+    suspend fun getRegions(worldName: String?): List<Region> {
         return regions[worldName]?.values?.toList() ?: emptyList()
     }
 
@@ -969,7 +971,7 @@ class RegionManager(private val worlds: Worlds, private val minecraftServer: Min
      * @param regionId The ID of the region
      * @return The region, or null if not found
      */
-    suspend fun getRegion(worldName: String, regionId: UUID): Region? {
+    suspend fun getRegion(worldName: String?, regionId: UUID): Region? {
         return regions[worldName]?.get(regionId)
     }
 
@@ -1045,9 +1047,9 @@ class RegionManager(private val worlds: Worlds, private val minecraftServer: Min
      * Saves all regions for a world to storage
      * @param worldName The name of the world
      */
-    private suspend fun saveRegions(worldName: String) {
+    private suspend fun saveRegions(worldName: String?) {
         val worldRegions = regions[worldName] ?: return
-        val regionsFile = getRegionsFile(worldName)
+        val regionsFile = getRegionsFile(worldName as String)
 
         // Convert regions to a map for YAML storage
         val regionsData = mutableMapOf<String, Any>()

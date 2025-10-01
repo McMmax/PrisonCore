@@ -6,8 +6,11 @@ import net.minestom.server.instance.Instance
 import net.minestom.server.instance.LightingChunk
 import twizzy.tech.game.MineManager
 import twizzy.tech.game.RegionManager
+import net.hollowcube.polar.PolarWriter
 import java.io.File
 import java.util.*
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 class InstanceMap(
     private val worlds: Worlds,
@@ -18,6 +21,8 @@ class InstanceMap(
     val playerInstances = mutableMapOf<UUID, Instance>()
     // Map of player UUID to their spawn position
     private val playerSpawns = mutableMapOf<UUID, Pos>()
+    // Map of cell ID to their vault instance
+    val cellVaultInstances = mutableMapOf<String, Instance>()
 
     /**
      * Creates a new instance for the player, copying the specified world (Polar, regions, mines)
@@ -144,6 +149,194 @@ class InstanceMap(
 
         mineManager.resetMine(player.uuid.toString(), "${player.uuid}_mine")
         return instance
+    }
+
+    suspend fun createCellInstance(cellId: String) {
+        // Create a new instance for the cell vault
+        val instance = net.minestom.server.MinecraftServer.getInstanceManager().createInstanceContainer(worlds.fullbrightKey)
+        instance.time = 1000L
+        instance.timeRate = 0
+        instance.setChunkSupplier(::LightingChunk)
+
+        // Set up the polar file for the cell vault
+        val polarFile = File(worlds.worldsDir, "cells/$cellId.polar")
+        if (polarFile.exists()) {
+            instance.setChunkLoader(net.hollowcube.polar.PolarLoader(polarFile.toPath()))
+        } else {
+            // Default generator for cell vault
+            instance.setGenerator { unit ->
+                unit.modifier().fillHeight(0, 40, net.minestom.server.instance.block.Block.STONE)
+            }
+        }
+
+        // Store the instance for the cell vault
+        cellVaultInstances[cellId] = instance
+    }
+
+    /**
+     * Creates a cell vault instance for cells at level 10+
+     */
+    suspend fun createCellVault(cellId: String): Instance? {
+        try {
+            // Create vault directory structure
+            val vaultDir = File(worlds.worldsDir, "vaults")
+            if (!vaultDir.exists()) vaultDir.mkdirs()
+
+            val cellVaultDir = File(vaultDir, cellId)
+            if (!cellVaultDir.exists()) cellVaultDir.mkdirs()
+
+            // Create instance
+            val instance = net.minestom.server.MinecraftServer.getInstanceManager().createInstanceContainer(worlds.fullbrightKey)
+            instance.time = 1000L
+            instance.timeRate = 0
+            instance.setChunkSupplier(::LightingChunk)
+
+            // Check if cell already has a saved vault
+            val existingPolarFile = File(cellVaultDir, "$cellId.polar")
+            if (existingPolarFile.exists()) {
+                // Load existing vault
+                instance.setChunkLoader(net.hollowcube.polar.PolarLoader(existingPolarFile.toPath()))
+            } else {
+                // Copy the default cell.polar template
+                val templatePolarFile = File("src/main/resources/cell.polar")
+                if (templatePolarFile.exists()) {
+                    Files.copy(templatePolarFile.toPath(), existingPolarFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    instance.setChunkLoader(net.hollowcube.polar.PolarLoader(existingPolarFile.toPath()))
+                } else {
+                    // Fallback to default generation if template doesn't exist
+                    instance.setGenerator { unit ->
+                        unit.modifier().fillHeight(0, 1, net.minestom.server.instance.block.Block.BEDROCK)
+                        unit.modifier().fillHeight(1, 40, net.minestom.server.instance.block.Block.STONE)
+                    }
+                }
+            }
+
+            // Create config file for the vault
+            val configFile = File(cellVaultDir, "config.yml")
+            if (!configFile.exists()) {
+                val defaultConfig = mapOf(
+                    "filepath" to existingPolarFile.absolutePath,
+                    "spawnPoint" to mapOf(
+                        "x" to 0.0,
+                        "y" to 1.0,
+                        "z" to 0.0,
+                        "yaw" to 0.0f,
+                        "pitch" to 0.0f
+                    )
+                )
+                YamlFactory.saveConfig(defaultConfig, configFile)
+            }
+
+            // Store the vault instance
+            cellVaultInstances[cellId] = instance
+
+            println("[InstanceMap] Created vault for cell $cellId")
+            return instance
+        } catch (e: Exception) {
+            println("[InstanceMap] Failed to create cell vault for $cellId: ${e.message}")
+            e.printStackTrace()
+            return null
+        }
+    }
+
+    /**
+     * Gets the vault instance for a cell
+     */
+    fun getCellVault(cellId: String): Instance? = cellVaultInstances[cellId]
+
+    /**
+     * Gets the vault spawn position for a cell (always 0, 1, 0 by default)
+     */
+    fun getCellVaultSpawn(cellId: String): Pos {
+        val vaultDir = File(worlds.worldsDir, "vaults/$cellId")
+        val configFile = File(vaultDir, "config.yml")
+
+        return if (configFile.exists()) {
+            try {
+                val config = YamlFactory.loadConfig(configFile)
+                val spawnPoint = config["spawnPoint"] as? Map<*, *>
+                if (spawnPoint != null) {
+                    val x = (spawnPoint["x"] as? Number)?.toDouble() ?: 0.0
+                    val y = (spawnPoint["y"] as? Number)?.toDouble() ?: 1.0
+                    val z = (spawnPoint["z"] as? Number)?.toDouble() ?: 0.0
+                    val yaw = (spawnPoint["yaw"] as? Number)?.toFloat() ?: 0.0f
+                    val pitch = (spawnPoint["pitch"] as? Number)?.toFloat() ?: 0.0f
+                    Pos(x, y, z, yaw, pitch)
+                } else {
+                    Pos(0.0, 1.0, 0.0)
+                }
+            } catch (e: Exception) {
+                Pos(0.0, 1.0, 0.0)
+            }
+        } else {
+            Pos(0.0, 1.0, 0.0)
+        }
+    }
+
+    /**
+     * Saves all cell vaults to disk
+     */
+    suspend fun saveAllCellVaults() {
+        for ((cellId, instance) in cellVaultInstances) {
+            saveCellVault(cellId, instance)
+        }
+    }
+
+    /**
+     * Saves a specific cell vault to disk
+     */
+    private suspend fun saveCellVault(cellId: String, instance: Instance) {
+        try {
+            val vaultDir = File(worlds.worldsDir, "vaults/$cellId")
+            if (!vaultDir.exists()) vaultDir.mkdirs()
+
+            val polarFile = File(vaultDir, "$cellId.polar")
+            val tempPolarFile = File(vaultDir, "$cellId.polar.tmp")
+
+            // Save the instance to polar format using the correct API (based on Polar example)
+            val polarLoader = net.hollowcube.polar.PolarLoader(net.hollowcube.polar.PolarWorld())
+            (instance as net.minestom.server.instance.InstanceContainer).setChunkLoader(polarLoader)
+            instance.saveInstance().join()
+
+            // Write the polar world to a temporary file first
+            val polarData = PolarWriter.write(polarLoader.world())
+
+            // Write to temporary file first to prevent corruption
+            java.nio.file.Files.write(
+                tempPolarFile.toPath(),
+                polarData,
+                java.nio.file.StandardOpenOption.CREATE,
+                java.nio.file.StandardOpenOption.WRITE,
+                java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
+            )
+
+            // Only replace the original file if the write was successful
+            if (tempPolarFile.exists() && tempPolarFile.length() > 0) {
+                // Delete old file if it exists
+                if (polarFile.exists()) {
+                    polarFile.delete()
+                }
+                // Rename temp file to final file
+                tempPolarFile.renameTo(polarFile)
+                println("[InstanceMap] Saved vault for cell $cellId (${polarFile.length()} bytes)")
+            } else {
+                println("[InstanceMap] Failed to save vault for cell $cellId: Temporary file is empty or doesn't exist")
+                // Clean up temp file if it exists
+                if (tempPolarFile.exists()) {
+                    tempPolarFile.delete()
+                }
+            }
+
+        } catch (e: Exception) {
+            println("[InstanceMap] Failed to save vault for cell $cellId: ${e.message}")
+            e.printStackTrace()
+
+            // Clean up temp file if it exists
+            val tempPolarFile = File(worlds.worldsDir, "vaults/$cellId/$cellId.polar.tmp")
+            if (tempPolarFile.exists()) {
+                tempPolarFile.delete()
+            }
+        }
     }
 
     fun getInstance(player: Player): Instance? = playerInstances[player.uuid]

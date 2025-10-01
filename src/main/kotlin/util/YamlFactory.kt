@@ -29,8 +29,8 @@ class YamlFactory {
          * Initializes the language system by loading the lang.yaml file.
          * @param langFilePath The path to the language file (defaults to "src/main/resources/lang.yaml").
          */
-        fun initializeLanguage(langFilePath: String = "lang.yaml") {
-            languageFile = createConfigIfNotExists(langFilePath, "lang.yaml")
+        fun initializeLanguage(langFilePath: String = "lang.yml") {
+            languageFile = createConfigIfNotExists(langFilePath, "lang.yml")
             reloadLanguage()
         }
 

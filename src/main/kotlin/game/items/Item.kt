@@ -2,10 +2,9 @@ package twizzy.tech.game.items
 
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
-import net.minestom.server.item.ItemComponent
+import net.minestom.server.component.DataComponents
 import net.minestom.server.item.ItemStack
 import net.minestom.server.item.Material
-import net.minestom.server.item.component.Unbreakable
 import net.minestom.server.tag.Tag
 import java.util.*
 
@@ -15,7 +14,7 @@ open class Item(
     val displayItem: Material,
     val isGlowing: Boolean = false,
     val unbreakable: Boolean = false,
-    var durability: Int? = 0, // Default durability is 0
+    var durability: Int? = 1, // Default durability is 0
     val uid: UUID = UUID.randomUUID() // Add unique item ID with default random generation
 ) {
     /**
@@ -27,12 +26,12 @@ open class Item(
         var itemStack = ItemStack.builder(displayItem)
             .customName(Component.text(displayName))
             .set(TAG_ITEM_NAME, name)
-            .set(ItemComponent.MAX_DAMAGE, durability)
+            .set(DataComponents.MAX_DAMAGE, durability)
             .set(TAG_ITEM_UID, uid.toString()) // Save the UID
             .build()
 
         if (unbreakable) {
-            itemStack = itemStack.with(ItemComponent.UNBREAKABLE, Unbreakable(false))
+            itemStack = itemStack.with(DataComponents.UNBREAKABLE)
         }
 
         // Apply glowing effect if needed
@@ -57,7 +56,7 @@ open class Item(
         fun fromItemStack(itemStack: ItemStack): Item? {
             // Retrieve our custom properties from the item tags
             val name = itemStack.getTag(TAG_ITEM_NAME) ?: return null
-            val durability = itemStack.get(ItemComponent.MAX_DAMAGE)
+            val durability = itemStack.get(DataComponents.MAX_DAMAGE)
             val uidString = itemStack.getTag(TAG_ITEM_UID)
 
             // Parse the UUID or generate a new one if not present
@@ -68,7 +67,7 @@ open class Item(
             }
 
             // Extract display name as plain string from the custom name component
-            val displayNameComponent = itemStack.get(ItemComponent.CUSTOM_NAME)
+            val displayNameComponent = itemStack.get(DataComponents.CUSTOM_NAME)
             val displayName = displayNameComponent?.let { PlainTextComponentSerializer.plainText().serialize(it) } ?: name
 
             return Item(

@@ -1,7 +1,7 @@
 mines:
 - name: GTA_mine
   regionId: 076c7fb5-5c7b-455f-8d68-996b8bc69cfd
-  lastReset: 1753829839451
+  lastReset: 1759293773273
   resetInterval: 1800
   blocks:
   - block: minecraft:stone_bricks

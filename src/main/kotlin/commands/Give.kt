@@ -1,7 +1,8 @@
 package twizzy.tech.commands
 
+import net.kyori.adventure.text.Component
+import net.minestom.server.component.DataComponents
 import net.minestom.server.entity.Player
-import net.minestom.server.item.ItemComponent
 import net.minestom.server.item.ItemStack
 import revxrsal.commands.annotation.Command
 import revxrsal.commands.annotation.Description
@@ -9,6 +10,7 @@ import revxrsal.commands.annotation.Optional
 import revxrsal.commands.minestom.annotation.CommandPermission
 import twizzy.tech.game.items.Item
 import twizzy.tech.game.items.pickaxe.boosters.Experience
+import twizzy.tech.game.pets.flying.Bat
 import java.util.*
 
 @CommandPermission("command.give")
@@ -21,7 +23,7 @@ class Give {
             "exp_booster_3x_30m" to { Experience.tripleXPItem(1800, "Command") },
             "exp_booster_5x_15m" to { Experience.fiveTimesXPItem(900, "Command") },
             "exp_booster_10x_5m" to { Experience.createItem(10.0, 300, "Command") },
-            "exp_booster_2x_permanent" to { Experience.permanentDoubleXPItem("Command") }
+            "exp_booster_2x_permanent" to { Experience.permanentDoubleXPItem("Command") },
         )
     }
 
@@ -50,7 +52,7 @@ class Give {
 
         // Send confirmation messages
         val sampleItem = itemFactory()
-        val displayName = sampleItem.get(ItemComponent.CUSTOM_NAME)?.let {
+        val displayName = sampleItem.get(DataComponents.CUSTOM_NAME)?.let {
             net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText().serialize(it)
         } ?: itemName
 
@@ -91,7 +93,7 @@ class Give {
         player.sendMessage("§7Name: §f${item.name}")
         player.sendMessage("§7Display Name: §f${item.displayName}")
         player.sendMessage("§7Material: §f${item.displayItem}")
-        player.sendMessage("§7Durability: §f${itemInHand.get(ItemComponent.DAMAGE)}/${item.durability}")
+        player.sendMessage("§7Durability: §f${itemInHand.get(DataComponents.DAMAGE)}/${item.durability}")
         player.sendMessage("§7UID: §f${item.uid}")
     }
 

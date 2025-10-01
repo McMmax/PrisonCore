@@ -1,29 +1,21 @@
 package twizzy.tech.listeners
 
-import com.github.shynixn.mccoroutine.minestom.scope
-import kotlinx.coroutines.launch
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.sound.Sound
 import net.kyori.adventure.text.Component
-import net.kyori.adventure.text.format.NamedTextColor
-import net.kyori.adventure.title.Title
 import net.minestom.server.MinecraftServer
 import net.minestom.server.coordinate.Pos
 import net.minestom.server.coordinate.Vec
 import net.minestom.server.entity.GameMode
 import net.minestom.server.event.player.PlayerBlockBreakEvent
 import net.minestom.server.event.player.PlayerBlockPlaceEvent
-import net.minestom.server.item.ItemComponent
+import net.minestom.server.component.DataComponents
 import net.minestom.server.item.ItemStack
 import net.minestom.server.item.Material
 import net.minestom.server.network.packet.server.play.ParticlePacket
 import net.minestom.server.particle.Particle
-import twizzy.tech.game.Engine
 import twizzy.tech.game.RegionManager
 import twizzy.tech.game.items.pickaxe.Pickaxe
-import twizzy.tech.game.items.pickaxe.boosters.Backpack
-import twizzy.tech.gameEngine
-import twizzy.tech.player.PlayerData
 import twizzy.tech.util.Worlds
 import twizzy.tech.util.YamlFactory
 
@@ -53,11 +45,11 @@ class MapInteractions(private val minecraftServer: MinecraftServer, private val 
                 val pickaxe = Pickaxe.fromItemStack(player.itemInMainHand)
 
                 // Always handle durability for non-pickaxe items or items that aren't unbreakable
-                if (pickaxe == null && player.itemInMainHand.get(ItemComponent.UNBREAKABLE) == null && player.itemInMainHand.get(ItemComponent.TOOL) != null) {
+                if (pickaxe == null && player.itemInMainHand.get(DataComponents.UNBREAKABLE) == null && player.itemInMainHand.get(DataComponents.TOOL) != null) {
                     val durability = player.itemInMainHand.builder()
-                        .set(ItemComponent.DAMAGE, player.itemInMainHand.get(ItemComponent.DAMAGE)?.inc())
+                        .set(DataComponents.DAMAGE, player.itemInMainHand.get(DataComponents.DAMAGE)?.inc())
                         .build()
-                    if (player.itemInMainHand.get(ItemComponent.DAMAGE) == player.itemInMainHand.get(ItemComponent.MAX_DAMAGE)) {
+                    if (player.itemInMainHand.get(DataComponents.DAMAGE) == player.itemInMainHand.get(DataComponents.MAX_DAMAGE)) {
                         player.itemInMainHand = ItemStack.of(Material.AIR)
                         player.playSound(
                             Sound.sound(

@@ -89,6 +89,7 @@ class World(private val worlds: Worlds) {
         // Determine which world to show info for - either specified or current
         val targetWorldName: String
         val instance: Instance
+        val worldInfo: Worlds.WorldInfo
 
         if (worldName != null) {
             // User specified a world name
@@ -103,6 +104,14 @@ class World(private val worlds: Worlds) {
                 player.sendMessage(YamlFactory.getMessage("commands.world.info.failed_load", mapOf("name" to worldName)))
                 return
             }
+
+            // Get world info for regular worlds
+            worldInfo = try {
+                worlds.getWorldInfo(targetWorldName)
+            } catch (e: Exception) {
+                player.sendMessage(YamlFactory.getMessage("commands.world.info.failed", mapOf("error" to (e.message ?: "Unknown error"))))
+                return
+            }
         } else {
             // Use the player's current world
             instance = player.instance
@@ -114,27 +123,37 @@ class World(private val worlds: Worlds) {
             }
 
             targetWorldName = currentWorldName
+
+            // Check if this is a cell vault instance
+            val cellVaultInfo = worlds.getCellVaultInfo(instance)
+            if (cellVaultInfo != null) {
+                // This is a cell vault, use the cell vault info
+                worldInfo = cellVaultInfo
+            } else {
+                // This is a regular world, use normal world info
+                worldInfo = try {
+                    worlds.getWorldInfo(targetWorldName)
+                } catch (e: Exception) {
+                    player.sendMessage(YamlFactory.getMessage("commands.world.info.failed", mapOf("error" to (e.message ?: "Unknown error"))))
+                    return
+                }
+            }
         }
 
-        try {
-            val worldInfo = worlds.getWorldInfo(targetWorldName)
-
-            player.sendMessage(YamlFactory.getMessage("commands.world.info.header"))
-            player.sendMessage(YamlFactory.getMessage("commands.world.info.name", mapOf("name" to targetWorldName)))
-            player.sendMessage(YamlFactory.getMessage("commands.world.info.spawn", mapOf(
-                "x" to worldInfo.spawnPoint.x,
-                "y" to worldInfo.spawnPoint.y,
-                "z" to worldInfo.spawnPoint.z
-            )))
-            player.sendMessage(YamlFactory.getMessage("commands.world.info.filepath", mapOf(
-                "filepath" to if (worldInfo.filepath.isEmpty()) "None" else worldInfo.filepath
-            )))
-            player.sendMessage(YamlFactory.getMessage("commands.world.info.chunks", mapOf("count" to instance.chunks.size)))
-            player.sendMessage(YamlFactory.getMessage("commands.world.info.players", mapOf("count" to instance.players.size)))
-            player.sendMessage(YamlFactory.getMessage("commands.world.info.footer"))
-        } catch (e: Exception) {
-            player.sendMessage(YamlFactory.getMessage("commands.world.info.failed", mapOf("error" to (e.message ?: "Unknown error"))))
-        }
+        // Display the world information
+        player.sendMessage(YamlFactory.getMessage("commands.world.info.header"))
+        player.sendMessage(YamlFactory.getMessage("commands.world.info.name", mapOf("name" to worldInfo.name)))
+        player.sendMessage(YamlFactory.getMessage("commands.world.info.spawn", mapOf(
+            "x" to worldInfo.spawnPoint.x,
+            "y" to worldInfo.spawnPoint.y,
+            "z" to worldInfo.spawnPoint.z
+        )))
+        player.sendMessage(YamlFactory.getMessage("commands.world.info.filepath", mapOf(
+            "filepath" to if (worldInfo.filepath.isEmpty()) "None" else worldInfo.filepath
+        )))
+        player.sendMessage(YamlFactory.getMessage("commands.world.info.chunks", mapOf("count" to instance.chunks.size)))
+        player.sendMessage(YamlFactory.getMessage("commands.world.info.players", mapOf("count" to instance.players.size)))
+        player.sendMessage(YamlFactory.getMessage("commands.world.info.footer"))
     }
 
     @Subcommand("tp")

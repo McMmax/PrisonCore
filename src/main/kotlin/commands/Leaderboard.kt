@@ -27,7 +27,7 @@ class Leaderboard {
         @Optional page: Int?
     ) {
         if (type.isNullOrBlank()) {
-            val message = YamlFactory.getMessage("commands.commands.leaderboard.usage")
+            val message = YamlFactory.getMessage("commands.leaderboard.usage")
             actor.sendMessage(Component.text(message))
             return
         }

@@ -1,7 +1,7 @@
 package twizzy.tech.game.items.pickaxe.boosters
 
 import net.kyori.adventure.text.Component
-import net.minestom.server.item.ItemComponent
+import net.minestom.server.component.DataComponents
 import net.minestom.server.item.ItemStack
 import net.minestom.server.item.Material
 import net.minestom.server.tag.Tag
@@ -97,7 +97,7 @@ class Experience(
 
         // Set lore
         if (lore.isNotEmpty()) {
-            itemStack = itemStack.with(ItemComponent.LORE, lore.map { Component.text(it) })
+            itemStack = itemStack.with(DataComponents.LORE, lore.map { Component.text(it) })
         }
 
         return itemStack

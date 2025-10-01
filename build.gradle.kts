@@ -16,14 +16,24 @@ repositories {
     maven("https://repo.hypera.dev/snapshots/") // spark-minestom
     maven("https://repo.lucko.me/") // spark-common
     maven("https://oss.sonatype.org/content/repositories/snapshots/") // spark-common's dependencies
+    maven("https://mvn.everbuild.org/public")
+
+    maven("https://repo.panda-lang.org/releases") // lite commands
+    maven("https://repo.eternalcode.pl/snapshots") // lite commands
 }
 
 dependencies {
-    implementation("net.minestom:minestom-snapshots:0366b58bfe")
+    implementation("net.minestom:minestom:2025.07.14-1.21.7")
 
-    implementation("dev.hollowcube:polar:1.13.0")
+    implementation("dev.hollowcube:polar:1.14.7")
 
-    implementation("com.github.TogAr2:MinestomPvP:dfb8f0c342")
+    implementation("com.github.TogAr2:MinestomPvP:-SNAPSHOT")
+    implementation("org.everbuild.blocksandstuff:blocksandstuff-blocks:1.5.0-SNAPSHOT")
+    implementation("org.everbuild.blocksandstuff:blocksandstuff-common:1.5.0-SNAPSHOT")
+    implementation("org.everbuild.blocksandstuff:blocksandstuff-fluids:1.5.0-SNAPSHOT")
+
+    implementation("dev.rollczi:litecommands-minestom:3.10.0-SNAPSHOT")
+
 
 //    // Lamp Command Framework
 //    implementation("io.github.revxrsal:lamp.common:4.0.0-rc.4")
@@ -55,6 +65,11 @@ dependencies {
 
     // Redis Driver (Lettuce)
     implementation("io.lettuce:lettuce-core:6.3.2.RELEASE")
+
+    // Jasync-SQL for PostgreSQL
+    implementation("com.github.jasync-sql:jasync-postgresql:2.2.4")
+
+    implementation("eu.koboo:stomui:1.0.2")
 }
 
 tasks.test {

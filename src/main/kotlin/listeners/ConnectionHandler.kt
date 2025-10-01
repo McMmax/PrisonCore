@@ -9,6 +9,7 @@ import net.minestom.server.entity.Player
 import net.minestom.server.event.player.AsyncPlayerConfigurationEvent
 import net.minestom.server.event.player.PlayerDisconnectEvent
 import net.minestom.server.event.player.PlayerLoadedEvent
+import net.minestom.server.event.player.PlayerSpawnEvent
 import net.minestom.server.item.ItemStack
 import net.minestom.server.item.Material
 import twizzy.tech.isServerLoaded
@@ -18,8 +19,20 @@ import twizzy.tech.util.LettuceCache
 import twizzy.tech.util.MongoStream
 import twizzy.tech.gameEngine
 import java.util.*
+import kotlinx.coroutines.*
+import twizzy.tech.commands.Pickaxe
+import twizzy.tech.game.items.backpack.Backpack
+import twizzy.tech.game.items.containers.PetPouch
+import kotlin.collections.mutableListOf
 
+/**
+ * Handles player connections and disconnections with proper resource management
+ */
 class ConnectionHandler(minecraftServer: MinecraftServer, instanceMap: InstanceMap) {
+
+    companion object {
+        private val cleanupScope = CoroutineScope(Dispatchers.IO + SupervisorJob() + CoroutineName("PlayerCleanup"))
+    }
 
     init {
         val lettuce = LettuceCache.getInstance()
@@ -41,8 +54,8 @@ class ConnectionHandler(minecraftServer: MinecraftServer, instanceMap: InstanceM
 
             setPlayerInventory(player)
 
-            // Load backpack from YAML
-            PlayerData.loadBackpack(player.uuid)
+            // Load blockpack from YAML
+            PlayerData.loadBlockpack(player.uuid)
 
             instanceMap.createInstance(player, "GTA")
 
@@ -53,7 +66,36 @@ class ConnectionHandler(minecraftServer: MinecraftServer, instanceMap: InstanceM
             }
 
             if (!hasPickaxe) {
-                player.inventory.addItemStack(ItemStack.of(Material.WOODEN_PICKAXE))
+                Pickaxe().getPickaxe(player)
+            }
+
+            val hasBlockpack = (0 until player.inventory.size).any { slot ->
+                val item = player.inventory.getItemStack(slot)
+                !item.isAir && item.material().name().contains("nether_star")
+            }
+
+            if (!hasBlockpack) {
+
+                val backpack = Backpack(
+                    owner = player.uuid.toString(),
+                )
+
+                player.inventory.setItemStack(8, backpack.toItemStack())
+            }
+
+            val hasPetPouch = (0 until player.inventory.size).any { slot ->
+                val item = player.inventory.getItemStack(slot)
+                !item.isAir && item.material().name().contains("bundle")
+            }
+
+            if (!hasPetPouch) {
+                val petPouch = twizzy.tech.game.items.containers.PetPouch(
+                    contents = mutableMapOf(),
+                    selectedPets = MutableList(PetPouch.MAX_SELECTED_PETS) { null },
+                    -1, player.uuid)
+
+
+                player.inventory.setItemStack(7, petPouch.toItemStack())
             }
         }
 
@@ -74,7 +116,7 @@ class ConnectionHandler(minecraftServer: MinecraftServer, instanceMap: InstanceM
             } ?: "Mythic Prison"
 
             // Create a sidebar for the player with config title
-            val sidebarTitle = Component.text(titleText, NamedTextColor.LIGHT_PURPLE, TextDecoration.BOLD)
+            val sidebarTitle = Component.text(titleText ?: "", NamedTextColor.LIGHT_PURPLE, TextDecoration.BOLD)
             val sidebar = twizzy.tech.util.ComponentSidebar(sidebarTitle)
             sidebar.addViewer(player)
 
@@ -96,18 +138,27 @@ class ConnectionHandler(minecraftServer: MinecraftServer, instanceMap: InstanceM
                         Component.text("Balance: $0", NamedTextColor.GREEN),
                         Component.text("Tokens: 0", NamedTextColor.GOLD),
                         Component.text("Souls: 0", NamedTextColor.LIGHT_PURPLE),
-                        Component.text("Backpack: 0", NamedTextColor.AQUA)
+                        Component.text("Blockpack: 0", NamedTextColor.AQUA)
                     )
                 }
             }
         }
 
+        MinecraftServer.getGlobalEventHandler().addSuspendingListener(minecraftServer, PlayerSpawnEvent::class.java) { event ->
+            val player = event.player
+
+            // Reactivate pet if player had an active pet when they left
+            reactivatePlayerPet(player)
+        }
 
         MinecraftServer.getGlobalEventHandler().addSuspendingListener(minecraftServer, PlayerDisconnectEvent::class.java) { event ->
             if (!isServerLoaded) {
                 return@addSuspendingListener
             }
             val player = event.player
+
+            // Deactivate any active pets before disconnect
+            deactivatePlayerPet(player)
 
             // Clean up the batching system for this player
             gameEngine.cleanupPlayerBatching(player.uuid)
@@ -118,8 +169,8 @@ class ConnectionHandler(minecraftServer: MinecraftServer, instanceMap: InstanceM
             // Save inventory to YAML
             PlayerData.saveInventory(player.uuid, player.inventory)
 
-            // Save backpack to YAML
-            PlayerData.saveBackpack(player.uuid)
+            // Save blockpack to YAML
+            PlayerData.saveBlockpack(player.uuid)
 
             // Save player data to MongoDB when they disconnect
             savePlayerData(player.uuid, player.username)
@@ -198,6 +249,50 @@ class ConnectionHandler(minecraftServer: MinecraftServer, instanceMap: InstanceM
         } catch (e: Exception) {
             println("Failed to save player data for $username: ${e.message}")
             e.printStackTrace()
+        }
+    }
+
+    /**
+     * Deactivates any active pet for the player
+     */
+    private fun deactivatePlayerPet(player: Player) {
+        try {
+            // Get the pet pouch from player inventory
+            val pouchItem = player.inventory.getItemStack(7)
+            val petPouch = PetPouch.fromItemStack(pouchItem)
+
+            if (petPouch != null && petPouch.activePetSlot != -1) {
+                // Only despawn the entity, but keep the activePetSlot so it can be restored on rejoin
+                val playerId = player.uuid
+                PetPouch.ACTIVE_PET_INSTANCES[playerId]?.onDeactivate()
+                PetPouch.ACTIVE_PET_INSTANCES.remove(playerId)
+                // Note: We don't call petPouch.deactivatePet() because that clears activePetSlot
+                // The activePetSlot should remain so it can be restored when player rejoins
+
+                // IMPORTANT: Save the pouch back to inventory to persist the activePetSlot
+                player.inventory.setItemStack(7, petPouch.toItemStack())
+            }
+        } catch (e: Exception) {
+            println("Error deactivating pet for player ${player.username}: ${e.message}")
+        }
+    }
+
+    /**
+     * Reactivates the player's active pet if they had one
+     */
+    private fun reactivatePlayerPet(player: Player) {
+        try {
+            // Get the pet pouch from player inventory
+            val pouchItem = player.inventory.getItemStack(7)
+            val petPouch = PetPouch.fromItemStack(pouchItem)
+
+            if (petPouch != null && petPouch.activePetSlot != -1) {
+                val instance = player.instance
+                val position = player.position
+                petPouch.activatePet(player, petPouch.activePetSlot, instance, position)
+            }
+        } catch (e: Exception) {
+            println("Error reactivating pet for player ${player.username}: ${e.message}")
         }
     }
 }

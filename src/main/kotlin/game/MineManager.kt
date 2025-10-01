@@ -118,7 +118,7 @@ class MineManager(private val worlds: Worlds, private val minecraftServer: Minec
     /**
      * Get a mine by name
      */
-    suspend fun getMine(worldName: String, mineName: String): Mine? {
+    suspend fun getMine(worldName: String?, mineName: String): Mine? {
         return mines[worldName]?.get(mineName)
     }
 
@@ -132,12 +132,12 @@ class MineManager(private val worlds: Worlds, private val minecraftServer: Minec
     /**
      * Delete a mine by name
      */
-    suspend fun deleteMine(worldName: String, mineName: String): Boolean {
+    suspend fun deleteMine(worldName: String?, mineName: String): Boolean {
         // Check if mine exists
         val mine = mines[worldName]?.get(mineName) ?: return false
 
         // Delete associated region
-        regionManager?.deleteRegion(worldName, mine.regionId)
+        regionManager.deleteRegion(worldName, mine.regionId)
 
         // Remove mine from cache
         mines[worldName]?.remove(mineName)
@@ -152,7 +152,7 @@ class MineManager(private val worlds: Worlds, private val minecraftServer: Minec
     /**
      * Set blocks for a mine
      */
-    suspend fun setMineBlocks(worldName: String, mineName: String, blockTypes: List<String>): Boolean {
+    suspend fun setMineBlocks(worldName: String?, mineName: String, blockTypes: List<String>): Boolean {
         // Get the mine
         val mine = mines[worldName]?.get(mineName) ?: return false
 
@@ -178,7 +178,7 @@ class MineManager(private val worlds: Worlds, private val minecraftServer: Minec
     /**
      * Reset a specific mine
      */
-    suspend fun resetMine(worldName: String, mineName: String): Boolean {
+    suspend fun resetMine(worldName: String?, mineName: String): Boolean {
         // Get mine
         val mine = mines[worldName]?.get(mineName) ?: return false
 
@@ -241,7 +241,7 @@ class MineManager(private val worlds: Worlds, private val minecraftServer: Minec
     /**
      * Get the file where mines are stored for a world
      */
-    private suspend fun getMinesFile(worldName: String): File {
+    private suspend fun getMinesFile(worldName: String?): File {
         val worldDir = File(worlds.worldsDir, worldName)
         if (!worldDir.exists()) {
             worldDir.mkdir()
@@ -252,7 +252,7 @@ class MineManager(private val worlds: Worlds, private val minecraftServer: Minec
     /**
      * Save all mines for a world to storage
      */
-    private suspend fun saveMines(worldName: String) {
+    private suspend fun saveMines(worldName: String?) {
         // Check if worldName is a UUID
         if (runCatching { UUID.fromString(worldName) }.isSuccess) {
             logger.debug("Skipping save for world $worldName as it is a UUID")
@@ -359,7 +359,7 @@ class MineManager(private val worlds: Worlds, private val minecraftServer: Minec
         logger.info("Loaded mines for ${mines.size} worlds")
     }
 
-    suspend fun setMineInterval(worldName: String, mineName: String, intervalSeconds: Long): Boolean {
+    suspend fun setMineInterval(worldName: String?, mineName: String, intervalSeconds: Long): Boolean {
         val mine = mines[worldName]?.get(mineName) ?: return false
         mine.resetInterval = intervalSeconds
         saveMines(worldName)
@@ -367,8 +367,8 @@ class MineManager(private val worlds: Worlds, private val minecraftServer: Minec
         return true
     }
 
-    suspend fun scheduleMineReset(worldName: String, mineName: String, intervalSeconds: Long) {
-        val worldJobs = mineResetJobs.getOrPut(worldName) { mutableMapOf() }
+    suspend fun scheduleMineReset(worldName: String?, mineName: String, intervalSeconds: Long) {
+        val worldJobs = mineResetJobs.getOrPut(worldName as String) { mutableMapOf() }
         worldJobs[mineName]?.cancel()
         val job = minecraftServer.scope.launch {
             while (true) {

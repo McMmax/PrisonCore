@@ -102,7 +102,7 @@ class ComponentSidebar(title: Component) : Viewable {
             val footer = (scoreboard["footer"] as? List<*>) ?: emptyList<String>()
 
             // Calculate values for placeholders
-            val backpackCount = playerData.backpack.values.sum()
+            val backpackCount = playerData.blockpack.values.sum()
 
             // Process header lines
             val headerComponents = header.mapNotNull { line ->
@@ -138,7 +138,7 @@ class ComponentSidebar(title: Component) : Viewable {
         } catch (e: Exception) {
             println("Error loading scoreboard config: ${e.message}")
             // Fallback to hardcoded values
-            val backpackCount = playerData.backpack.values.sum()
+            val backpackCount = playerData.blockpack.values.sum()
             update(
                 Component.text("Balance: $${twizzy.tech.util.CompactNotation.format(playerData.balance)}", NamedTextColor.GREEN),
                 Component.text("Tokens: ${twizzy.tech.util.CompactNotation.format(playerData.tokens)}", NamedTextColor.GOLD),

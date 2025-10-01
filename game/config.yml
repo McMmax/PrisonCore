@@ -100,9 +100,159 @@ pickaxe:
 ranks:
   basePrice: 10000
   priceIncrease: 15.0
-  maxRank: 100
+  maxRank: 1000
+
+  colors:
+    1: "§7" # Default color
+    10: "§f" # White for rank 10+
+    25: "§a" # Green for rank 25+
+    50: "§2" # Dark Green for rank 50+
+    100: "§a" # Green for rank 100+
+    250: "§b" # Aqua for rank 250+
+    500: "§e" # Yellow for rank 500+
+    750: "§6" # Gold for rank 750+
+    800: "§d" # Light Purple for rank 800+
+    900: "§5" # Purple for rank 900+
+    1000: "§c" # Red for rank 1000+
 
 leaderboard:
   refreshInterval: "2m"  # e.g. 10m, 30s, 1h, 90s, etc.
   perPage: 10         # entries per page
   maxPages: 10        # maximum number of pages
+
+cells:
+  leader-rank: 5 # Rank required to create a cell
+  member-limit: 10 # Maximum members in a cell
+
+  level-upgrade:
+    basePrice: 1000000 # 1 Million for level 2
+    priceIncrease: 10.0 # 10% increase per level
+
+chat:
+  global: "&7[%rank-color%R%rank-number%&7] %player%&7: &f%message%"
+  cell-global: "&8<&e%cell%&8> &7[%rank-color%R%rank-number%&7] %player%&7: &f%message%"
+
+
+# Pet System Configuration
+pets:
+  # Experience and Leveling System
+  leveling:
+    maxLevel: 100
+    baseExperience: 1000.0  # Base XP required for level 2
+    experienceMultiplier: 1.15  # XP requirement multiplier per level
+
+  # Experience Gain Configuration
+  experienceGain:
+    base: 50.0  # Base experience gained per collection cycle
+    levelMultiplier: 1.0  # Multiplier based on current level (not used for gain calculation)
+
+    # Rarity multipliers for experience gain
+    rarityMultipliers:
+      common: 1.0
+      uncommon: 1.2
+      rare: 1.5
+      epic: 2.0
+      legendary: 2.5
+      mythic: 3.0
+      eternal: 4.0
+
+  # Pet State Configuration
+  hunger:
+    decay_duration_seconds: 604800  # 7 days in seconds
+  happiness:
+    decay_duration_seconds: 604800  # 7 days in seconds
+  starvation:
+    death_timer_seconds: 604800  # 7 days in seconds
+
+  # Pet State Thresholds
+  states:
+    excited:
+      min_hunger: 95
+      min_happiness: 95
+    happy:
+      min_hunger: 80
+      min_happiness: 80
+    playful:
+      min_happiness: 60
+    calm:
+      min_hunger: 50
+      min_happiness: 50
+    hungry:
+      max_hunger: 49
+    sad:
+      max_happiness: 49
+    mad:
+      max_hunger: 20
+      max_happiness: 20
+
+  # Bat Pet Specific Configuration
+  bat:
+    # Base soul gain per 5-second cycle (affected by rarity)
+    baseSoulGain: 2.0
+
+    # Rarity multipliers for soul collection (every 5 seconds)
+    soulGainMultipliers:
+      common: 1.0     # 2.0 souls per 5 sec
+      uncommon: 1.5   # 3.0 souls per 5 sec
+      rare: 2.0       # 4.0 souls per 5 sec
+      epic: 2.5       # 5.0 souls per 5 sec
+      legendary: 3.0  # 6.0 souls per 5 sec
+      mythic: 4.0     # 8.0 souls per 5 sec
+      eternal: 5.0    # 10.0 souls per 5 sec
+
+    # Soul collection requirements
+    soulCollection:
+      minMiningTime: 300  # Minimum time in seconds of mining per day
+
+    # Interest System (affected by level)
+    interest:
+      # Base interest rate (very low)
+      baseRate: 0.00001
+
+      # Level-based interest rate increases
+      levelMultiplier: 0.0001  # Rate increase per level
+      exponentialBonus: 0.0000005  # Level^2 bonus
+
+      # Maximum interest rate cap
+      maxRate: 0.05  # 5% maximum
+
+      # Interest calculation interval
+      intervalSeconds: 300  # Calculate every 5 minutes
+
+      # Compound interest
+      compound: true
+
+      # Minimum souls required for interest
+      minSouls: 100.0
+
+      # Level-based interest milestones
+      milestones:
+        level10: 0.0005   # +0.05% at level 10
+        level25: 0.001    # +0.1% at level 25
+        level40: 0.002    # +0.2% at level 40
+        level55: 0.003    # +0.3% at level 55
+        level67: 0.005    # +0.5% at level 67
+        level80: 0.008    # +0.8% at level 80
+        level100: 0.015   # +1.5% at max level
+
+      # Daily mining bonuses
+      dailyMining:
+        activeMinerBonus: 2.0  # 2x interest if mined today
+
+        # Daily soul collection bonus
+        dailySoulBonus:
+          baseBonusPercent: 15.0   # 15% bonus souls if mined today
+          streakBonusPercent: 3.0  # +3% per consecutive day
+          maxDailyBonus: 100.0     # Maximum 100% bonus
+
+        # Mining streak bonuses
+        streakBonus:
+          baseStreakBonus: 0.001    # +0.1% per streak day
+          maxStreakBonus: 0.05      # Maximum 5% from streaks
+          levelStreakMultiplier: 0.00005  # Additional bonus per level
+
+        # Inactivity penalties
+        inactivityPenalty:
+          gracePeriod: 3           # Days before decay starts
+          decayRatePerDay: 0.02    # 2% decay per day after grace period
+          maxDecayPercent: 75.0    # Maximum 75% decay

@@ -10,6 +10,7 @@ import net.minestom.server.instance.InstanceContainer
 import net.minestom.server.instance.LightingChunk
 import net.minestom.server.instance.block.Block
 import net.minestom.server.registry.DynamicRegistry
+import net.minestom.server.registry.RegistryKey
 import net.minestom.server.world.DimensionType
 import org.slf4j.LoggerFactory
 import java.io.File
@@ -33,7 +34,7 @@ class Worlds(private var instanceMap: InstanceMap? = null) {
     val loadedWorlds = mutableMapOf<String, InstanceContainer>()
 
     val fullbright = DimensionType.builder().ambientLight(1.0f).respawnAnchorWorks(true).build()
-    val fullbrightKey: DynamicRegistry.Key<DimensionType?> =
+    val fullbrightKey: RegistryKey<DimensionType?> =
         MinecraftServer.getDimensionTypeRegistry().register(Key.key("fullbright"), fullbright)
 
     /**
@@ -118,7 +119,7 @@ class Worlds(private var instanceMap: InstanceMap? = null) {
      * @param name The name of the world to get
      * @return The world instance, or null if it doesn't exist
      */
-    suspend fun getWorld(name: String): InstanceContainer? {
+    suspend fun getWorld(name: String?): InstanceContainer? {
         // Check if the instance exists in InstanceMap
         instanceMap?.playerInstances?.entries?.find { it.key.toString() == name }?.let {
             return it.value as? InstanceContainer
@@ -174,7 +175,7 @@ class Worlds(private var instanceMap: InstanceMap? = null) {
         }
 
         // Cache the world instance
-        loadedWorlds[name] = instance
+        loadedWorlds[name as String] = instance
 
         return instance
     }
@@ -316,8 +317,19 @@ class Worlds(private var instanceMap: InstanceMap? = null) {
      * @param instance The instance to check
      * @return The name of the world, or null if not found
      */
-    fun getWorldNameFromInstance(instance: Instance): String {
-        // Check InstanceMap's playerInstances first (player UUID as world name)
+    fun getWorldNameFromInstance(instance: Instance): String? {
+        // Check if this is a cell vault instance first
+        instanceMap?.cellVaultInstances?.entries?.find { it.value === instance }?.let { (cellId, _) ->
+            // Get the cell name from the CellManager
+            val cell = twizzy.tech.game.cells.CellManager.getInstance().getCell(cellId)
+            return if (cell != null) {
+                "${cell.name}'s Vault"
+            } else {
+                "Cell Vault ($cellId)"
+            }
+        }
+
+        // Check InstanceMap's playerInstances (player UUID as world name)
         instanceMap?.playerInstances?.entries?.find { it.value === instance }?.let {
             return UUID.fromString(it.key.toString()).toString()
         }
@@ -355,7 +367,7 @@ class Worlds(private var instanceMap: InstanceMap? = null) {
                     return worldName
                 }
         }
-        return "Unknown World"
+        return null
     }
 
     /**
@@ -419,5 +431,55 @@ class Worlds(private var instanceMap: InstanceMap? = null) {
             logger.error("Failed to get spawn point from spawn world config, using default", e)
             return Pos(0.0, 42.0, 0.0)
         }
+    }
+
+    /**
+     * Gets detailed information about a cell vault
+     * @param instance The cell vault instance
+     * @return WorldInfo containing details about the cell vault
+     */
+    fun getCellVaultInfo(instance: Instance): WorldInfo? {
+        // Find the cell ID for this instance
+        val cellId = instanceMap?.cellVaultInstances?.entries?.find { it.value === instance }?.key
+            ?: return null
+
+        // Get the cell from CellManager
+        val cell = twizzy.tech.game.cells.CellManager.getInstance().getCell(cellId)
+            ?: return null
+
+        // Get the vault directory
+        val vaultDir = File(worldsDir, "vaults/$cellId")
+        val configFile = File(vaultDir, "config.yml")
+
+        val spawnPoint = if (configFile.exists()) {
+            try {
+                val config = YamlFactory.loadConfig(configFile)
+                val spawnPointMap = config["spawnPoint"] as? Map<*, *>
+                if (spawnPointMap != null) {
+                    val x = (spawnPointMap["x"] as? Number)?.toDouble() ?: 0.0
+                    val y = (spawnPointMap["y"] as? Number)?.toDouble() ?: 1.0
+                    val z = (spawnPointMap["z"] as? Number)?.toDouble() ?: 0.0
+                    val yaw = (spawnPointMap["yaw"] as? Number)?.toFloat() ?: 0.0f
+                    val pitch = (spawnPointMap["pitch"] as? Number)?.toFloat() ?: 0.0f
+                    SpawnPoint(x, y, z, yaw, pitch)
+                } else {
+                    SpawnPoint(0.0, 1.0, 0.0, 0.0f, 0.0f)
+                }
+            } catch (e: Exception) {
+                SpawnPoint(0.0, 1.0, 0.0, 0.0f, 0.0f)
+            }
+        } else {
+            SpawnPoint(0.0, 1.0, 0.0, 0.0f, 0.0f)
+        }
+
+        // Get the polar file path
+        val polarFile = File(vaultDir, "$cellId.polar")
+        val filepath = if (polarFile.exists()) {
+            polarFile.absolutePath
+        } else {
+            "Not yet saved"
+        }
+
+        return WorldInfo("${cell.name}'s Vault", filepath, spawnPoint)
     }
 }
